@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"sync/atomic"
 	"time"
 
 	"github.com/homuler/mitm-proxy-go"
@@ -37,9 +36,8 @@ func GetDestination(r *http.Request) (dest string, ok bool) {
 
 type proxyServer struct {
 	server     *http.Server
+	rootCert   tls.Certificate
 	nextProtos []string
-
-	inShutdown atomic.Bool // true when server is in shutdown
 }
 
 type ProxyServerOption func(*proxyServer) error
@@ -204,12 +202,10 @@ func ConnContext(f func(ctx context.Context, c net.Conn) context.Context) ProxyS
 }
 
 func (psrv *proxyServer) Close() error {
-	psrv.inShutdown.Store(true)
 	return psrv.server.Close()
 }
 
 func (psrv *proxyServer) Shutdown(ctx context.Context) error {
-	psrv.inShutdown.Store(true)
 	return psrv.server.Shutdown(ctx)
 }
 
@@ -225,11 +221,13 @@ type ProxyServer struct {
 	*proxyServer
 }
 
-func NewProxyServer(options ...ProxyServerOption) ProxyServer {
+func NewProxyServer(rootCert tls.Certificate, options ...ProxyServerOption) ProxyServer {
 	psrv := &proxyServer{
 		server: &http.Server{
 			Handler: RoundTripHandlerFunc,
 		},
+		nextProtos: []string{"h2", "http/1.1"},
+		rootCert:   rootCert,
 	}
 	for _, opt := range options {
 		opt(psrv)
@@ -243,7 +241,11 @@ func NewProxyServer(options ...ProxyServerOption) ProxyServer {
 			return connContext(WithConn(ctx, c), c)
 		}
 	}
-	psrv.server.Handler = Proxify(psrv.server.Handler, nil)
+
+	psrv.server.Handler = Proxify(psrv.server.Handler, &mitm.TLSConfig{
+		RootCertificate: &psrv.rootCert,
+		NextProtos:      psrv.nextProtos,
+	})
 	return ProxyServer{psrv}
 }
 
@@ -259,11 +261,12 @@ func tproxyConnContext(ctx context.Context, c net.Conn) context.Context {
 	return WithDestination(ctx, c.LocalAddr().String())
 }
 
-func NewTProxyServer(options ...ProxyServerOption) TProxyServer {
+func NewTProxyServer(rootCert tls.Certificate, options ...ProxyServerOption) TProxyServer {
 	psrv := &proxyServer{
 		server: &http.Server{
 			Handler: RoundTripHandlerFunc,
 		},
+		rootCert: rootCert,
 	}
 	for _, opt := range options {
 		opt(psrv)
@@ -282,13 +285,14 @@ func NewTProxyServer(options ...ProxyServerOption) TProxyServer {
 	return TProxyServer{psrv}
 }
 
-func (psrv TProxyServer) ServeTLS(l net.Listener, certFile, keyFile string) error {
+func (psrv TProxyServer) ServeTLS(l net.Listener) error {
 	nextProtos := psrv.nextProtos
 	if len(nextProtos) == 0 {
 		nextProtos = []string{"h2", "http/1.1"}
 	}
 	tl := mitm.NewTLSListener(l, &mitm.TLSConfig{
-		NextProtos: nextProtos,
+		RootCertificate: &psrv.rootCert,
+		NextProtos:      nextProtos,
 	})
 	return psrv.server.Serve(tl)
 }

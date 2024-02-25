@@ -41,6 +41,7 @@ type ProxyServerOption func(*ProxyServer) error
 type ProxyServer struct {
 	server *http3.Server
 
+	rootCert        tls.Certificate
 	nextProtos      []string
 	getServerConfig func(certificate *tls.Certificate, negotiatedProtocol string) *tls.Config
 	getClientConfig func(serverName string, alpnProtocols []string) *tls.Config
@@ -152,12 +153,13 @@ func GetClientConfig(f func(serverName string, alpnProtocols []string) *tls.Conf
 	}
 }
 
-func NewTProxyServer(opts ...ProxyServerOption) *ProxyServer {
+func NewTProxyServer(rootCert tls.Certificate, opts ...ProxyServerOption) *ProxyServer {
 	psrv := &ProxyServer{
 		server: &http3.Server{
 			Handler:     mitmhttp.RoundTripHandlerFunc,
 			ConnContext: tproxyConnContext,
 		},
+		rootCert: rootCert,
 	}
 	for _, opt := range opts {
 		opt(psrv)
@@ -171,7 +173,7 @@ func (psrv *ProxyServer) Close() error {
 }
 
 func (psrv *ProxyServer) Serve(conn net.PacketConn) (err error) {
-	ql, err := mitm.NewQUICListener(conn, nil)
+	ql, err := mitm.NewQUICListener(conn, psrv.rootCert, nil)
 	if err != nil {
 		return err
 	}

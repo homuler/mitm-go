@@ -130,12 +130,6 @@ func (h *proxyHandler) serveInnerConn(conn net.Conn, dstAddr string) error {
 }
 
 func Proxify(handler http.Handler, tlsConfig *mitm.TLSConfig) *proxyHandler {
-	if tlsConfig == nil {
-		tlsConfig = &mitm.TLSConfig{
-			NextProtos: []string{"h2", "http/1.1"},
-		}
-	}
-
 	return &proxyHandler{
 		tlsConfig: tlsConfig,
 		innerSrv: &http.Server{

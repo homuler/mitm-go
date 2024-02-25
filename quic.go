@@ -30,7 +30,7 @@ type QUICListener interface {
 var _ QUICListener = (*quicListener)(nil)
 
 // NewQUICListener returns a new net.Listener that listens for incoming TLS connections on l.
-func NewQUICListener(conn net.PacketConn, config *QUICListenerConfig) (*quicListener, error) {
+func NewQUICListener(conn net.PacketConn, rootCert tls.Certificate, config *QUICListenerConfig) (*quicListener, error) {
 	certStore := make(map[string]*tls.Certificate)
 	transport := &quic.Transport{Conn: conn}
 	// TODO: make it configurable
@@ -68,12 +68,12 @@ func NewQUICListener(conn net.PacketConn, config *QUICListenerConfig) (*quicList
 				// it should not occur.
 				return nil, fmt.Errorf("no certificates of %v(%v) found", serverName, addr)
 			}
-			cert, err := ForgeCertificate(certs[0])
+			cert, err := ForgeCertificate(&rootCert, certs[0])
 			if err != nil {
 				return nil, fmt.Errorf("failed to forge a certificate of %v(%v): %w", serverName, addr, err)
 			}
-			certStore[serverName] = cert
-			return cert, nil
+			certStore[serverName] = &cert
+			return &cert, nil
 		},
 		NextProtos: nextProtos,
 	}, quicServerConf)

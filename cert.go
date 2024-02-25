@@ -11,25 +11,31 @@ import (
 
 var serialNumberLimit = new(big.Int).Lsh(big.NewInt(1), 128)
 
-func ForgeCertificate(orig *x509.Certificate) (*tls.Certificate, error) {
+func ForgeCertificate(root *tls.Certificate, orig *x509.Certificate) (tls.Certificate, error) {
 	tmpl, err := createTemplate(orig)
 	if err != nil {
-		return nil, err
+		return tls.Certificate{}, err
 	}
 
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
-		return nil, err
+		return tls.Certificate{}, err
 	}
 
-	rootCert := RootCert()
-	certDer, err := x509.CreateCertificate(rand.Reader, tmpl, rootCert.Leaf, &key.PublicKey, rootCert.PrivateKey)
+	if root.Leaf == nil {
+		root.Leaf, err = x509.ParseCertificate(root.Certificate[0])
+		if err != nil {
+			return tls.Certificate{}, fmt.Errorf("failed to parse root certificate: %w", err)
+		}
+	}
+
+	certDer, err := x509.CreateCertificate(rand.Reader, tmpl, root.Leaf, &key.PublicKey, root.PrivateKey)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create certificate: %w", err)
+		return tls.Certificate{}, fmt.Errorf("failed to create certificate: %w", err)
 	}
 
-	return &tls.Certificate{
-		Certificate: [][]byte{certDer, RootCert().Certificate[0]},
+	return tls.Certificate{
+		Certificate: [][]byte{certDer, root.Certificate[0]},
 		PrivateKey:  key,
 	}, nil
 }
@@ -55,19 +61,7 @@ func createTemplate(orig *x509.Certificate) (*x509.Certificate, error) {
 	return &tmpl, nil
 }
 
-var _rootCert *tls.Certificate
-
-func RootCert() *tls.Certificate {
-	if _rootCert == nil {
-		_, err := LoadRootCert("rootCACert.pem", "rootCAKey.pem")
-		if err != nil {
-			panic(err)
-		}
-	}
-	return _rootCert
-}
-
-func LoadRootCert(certPath, keyPath string) (tls.Certificate, error) {
+func LoadCertificate(certPath, keyPath string) (tls.Certificate, error) {
 	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
 	if err != nil {
 		return tls.Certificate{}, err
@@ -76,6 +70,5 @@ func LoadRootCert(certPath, keyPath string) (tls.Certificate, error) {
 	if err != nil {
 		return tls.Certificate{}, err
 	}
-	_rootCert = &cert
 	return cert, nil
 }

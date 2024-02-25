@@ -7,13 +7,19 @@ import (
 	"sync"
 	"time"
 
+	"github.com/homuler/mitm-proxy-go"
 	mitmhttp "github.com/homuler/mitm-proxy-go/http"
 	"github.com/homuler/mitm-proxy-go/tproxy"
 )
 
 func main() {
-	mitmHttpServer := mitmhttp.NewProxyServer()
-	mitmHttpsServer := mitmhttp.NewProxyServer()
+	rootCert, err := mitm.LoadCertificate("rootCACert.pem", "rootCAKey.pem")
+	if err != nil {
+		panic(err)
+	}
+
+	mitmHttpServer := mitmhttp.NewProxyServer(rootCert)
+	mitmHttpsServer := mitmhttp.NewProxyServer(rootCert)
 
 	httpLn, err := tproxy.ListenTCP("tcp", &net.TCPAddr{IP: net.ParseIP("0.0.0.0"), Port: 8080})
 	if err != nil {
@@ -35,7 +41,6 @@ func main() {
 
 	go func() {
 		errCh <- mitmHttpsServer.ServeTLS(httpsLn, "rootCACert.pem", "rootCAKey.pem")
-		fmt.Println("https server is shutting down")
 	}()
 
 	err = <-errCh

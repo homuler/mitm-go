@@ -32,6 +32,9 @@ type serverInfo struct {
 type ServerInfoCache map[string]serverInfo
 
 type TLSConfig struct {
+	// RootCertificate is the root certificate to be used to forge certificates.
+	RootCertificate *tls.Certificate
+
 	// NextProtos is a list of supported ALPN protocols.
 	// If it is empty, the client specified list is used to negotiate the protocol with the actual server.
 	NextProtos []string
@@ -76,6 +79,8 @@ func (tl *tlsListener) Close() error   { return tl.listener.Close() }
 func (tl *tlsListener) Addr() net.Addr { return tl.listener.Addr() }
 
 var (
+	ErrMissingRootCertificate = errors.New("config.RootCertificate is required")
+
 	ErrPeekClientHello     = errors.New("failed to peek client hello")
 	ErrHandshakeWithServer = errors.New("failed to handshake with the server")
 )
@@ -88,6 +93,10 @@ type tlsConn struct {
 }
 
 func NewTLSServerConnWithBuffer(conn net.Conn, dstAddr string, config *TLSConfig, serverInfoCache ServerInfoCache, buffer []byte) (*tls.Conn, error) {
+	if config.RootCertificate == nil {
+		return nil, ErrMissingRootCertificate
+	}
+
 	c := newTlsConn(conn, dstAddr, config, buffer)
 	clientHello := &clientHelloMsg{}
 
@@ -183,11 +192,11 @@ func (c *tlsConn) handshakeWithServer(msg *clientHelloMsg, serverInfoCache Serve
 			// it should not occur.
 			return nil, "", fmt.Errorf("no certificates of %v(%v) found", serverName, addr)
 		}
-		cert, err := ForgeCertificate(certs[0])
+		cert, err := ForgeCertificate(c.config.RootCertificate, certs[0])
 		if err != nil {
 			return nil, "", fmt.Errorf("failed to forge a certificate of %v(%v): %w", serverName, addr, err)
 		}
-		si.certificate = cert
+		si.certificate = &cert
 	}
 
 	negotiatedProtocol := state.NegotiatedProtocol
