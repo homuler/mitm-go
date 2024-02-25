@@ -4,32 +4,8 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"slices"
-	"time"
-)
-
-type readTamperedConn struct {
-	conn net.Conn
-
-	reader io.Reader
-}
-
-var _ net.Conn = (*readTamperedConn)(nil)
-
-func (c *readTamperedConn) Read(b []byte) (int, error)         { return c.reader.Read(b) }
-func (c *readTamperedConn) Write(b []byte) (int, error)        { return c.conn.Write(b) }
-func (c *readTamperedConn) Close() error                       { return c.conn.Close() }
-func (c *readTamperedConn) LocalAddr() net.Addr                { return c.conn.LocalAddr() }
-func (c *readTamperedConn) RemoteAddr() net.Addr               { return c.conn.RemoteAddr() }
-func (c *readTamperedConn) SetDeadline(t time.Time) error      { return c.conn.SetDeadline(t) }
-func (c *readTamperedConn) SetReadDeadline(t time.Time) error  { return c.conn.SetReadDeadline(t) }
-func (c *readTamperedConn) SetWriteDeadline(t time.Time) error { return c.conn.SetWriteDeadline(t) }
-
-var (
-	ErrPeekClientHello     = errors.New("failed to peek client hello")
-	ErrHandshakeWithServer = errors.New("failed to handshake with the server")
 )
 
 type supportedProtocolMap map[string]bool
@@ -47,7 +23,15 @@ func (m supportedProtocolMap) getFirst(protos []string) (string, bool) {
 	return "", false
 }
 
-type TLSListenerConfig struct {
+type serverInfo struct {
+	certificate *tls.Certificate
+
+	protocols supportedProtocolMap // TODO: clear it periodically
+}
+
+type ServerInfoCache map[string]serverInfo
+
+type TLSConfig struct {
 	// NextProtos is a list of supported ALPN protocols.
 	// If it is empty, the client specified list is used to negotiate the protocol with the actual server.
 	NextProtos []string
@@ -59,28 +43,22 @@ type TLSListenerConfig struct {
 	GetClientConfig func(serverName string, alpnProtocols []string) *tls.Config
 }
 
-type serverInfo struct {
-	certificate *tls.Certificate
-
-	protocols supportedProtocolMap // TODO: clear it periodically
-}
-
 type tlsListener struct {
 	listener net.Listener
-	config   *TLSListenerConfig
+	config   *TLSConfig
 
-	serverInfoCache map[string]serverInfo
+	serverInfoCache ServerInfoCache
 }
 
 var _ net.Listener = (*tlsListener)(nil)
 
 // NewTLSListener returns a new net.Listener that listens for incoming TLS connections on l.
-func NewTLSListener(l net.Listener, config *TLSListenerConfig) net.Listener {
+func NewTLSListener(l net.Listener, config *TLSConfig) net.Listener {
 	return &tlsListener{
 		listener: l,
 		config:   config,
 
-		serverInfoCache: make(map[string]serverInfo),
+		serverInfoCache: make(ServerInfoCache),
 	}
 }
 
@@ -90,23 +68,42 @@ func (tl *tlsListener) Accept() (net.Conn, error) {
 		return nil, err
 	}
 
-	pr := NewPeekReader(c, make([]byte, 1024))
+	// TODO: use buffer pool
+	return NewTLSServerConnWithBuffer(c, c.LocalAddr().String(), tl.config, tl.serverInfoCache, nil)
+}
+
+func (tl *tlsListener) Close() error   { return tl.listener.Close() }
+func (tl *tlsListener) Addr() net.Addr { return tl.listener.Addr() }
+
+var (
+	ErrPeekClientHello     = errors.New("failed to peek client hello")
+	ErrHandshakeWithServer = errors.New("failed to handshake with the server")
+)
+
+type tlsConn struct {
+	conn    net.Conn
+	dstAddr string
+	reader  PeekReader
+	config  *TLSConfig
+}
+
+func NewTLSServerConnWithBuffer(conn net.Conn, dstAddr string, config *TLSConfig, serverInfoCache ServerInfoCache, buffer []byte) (*tls.Conn, error) {
+	c := newTlsConn(conn, dstAddr, config, buffer)
 	clientHello := &clientHelloMsg{}
-	err = peekClientHello(pr, clientHello)
+
+	err := peekClientHello(c.reader, clientHello)
 	if err != nil {
-		err = errors.Join(err, c.Close())
 		return nil, fmt.Errorf("%w: %w", ErrPeekClientHello, err)
 	}
 
-	cert, protocol, err := tl.handshakeWithServer(c, clientHello)
+	cert, protocol, err := c.handshakeWithServer(clientHello, serverInfoCache)
 	if err != nil {
-		err = errors.Join(err, c.Close())
 		return nil, fmt.Errorf("%w: %w", ErrHandshakeWithServer, err)
 	}
 
 	var serverConfig *tls.Config
-	if tl.config.GetServerConfig != nil {
-		serverConfig = tl.config.GetServerConfig(cert, protocol)
+	if c.config.GetServerConfig != nil {
+		serverConfig = c.config.GetServerConfig(cert, protocol)
 	} else {
 		serverConfig = &tls.Config{
 			Certificates: []tls.Certificate{*cert},
@@ -114,21 +111,39 @@ func (tl *tlsListener) Accept() (net.Conn, error) {
 		}
 	}
 
-	return tls.Server(&readTamperedConn{conn: c, reader: pr}, serverConfig), nil
+	return tls.Server(NewProxyConn(c.conn, dstAddr, TamperConnRead(c.reader.Read)), serverConfig), nil
+}
+
+func NewTLSServerConn(conn net.Conn, dstAddr string, config *TLSConfig, serverInfoCache ServerInfoCache) (*tls.Conn, error) {
+	return NewTLSServerConnWithBuffer(conn, dstAddr, config, serverInfoCache, nil)
+}
+
+func newTlsConn(conn net.Conn, dstAddr string, config *TLSConfig, buffer []byte) *tlsConn {
+	if len(buffer) == 0 {
+		buffer = make([]byte, 1024)
+	}
+
+	return &tlsConn{
+		conn:    conn,
+		dstAddr: dstAddr,
+		reader:  NewPeekReader(conn, buffer),
+		config:  config,
+	}
 }
 
 // handshakeWithServer returns a certificate of the server and the negotiated protocol.
-func (tl *tlsListener) handshakeWithServer(conn net.Conn, msg *clientHelloMsg) (*tls.Certificate, string, error) {
+// serverInfoCache will be updated with the result.
+func (c *tlsConn) handshakeWithServer(msg *clientHelloMsg, serverInfoCache ServerInfoCache) (*tls.Certificate, string, error) {
 	serverName := msg.serverName
 	alpnProtocols := msg.alpnProtocols
-	if len(tl.config.NextProtos) > 0 {
-		ps := tl.config.NextProtos
+	if len(c.config.NextProtos) > 0 {
+		ps := c.config.NextProtos
 		alpnProtocols = slices.DeleteFunc(alpnProtocols, func(s string) bool {
 			return !slices.Contains(ps, s)
 		})
 	}
 
-	si, ok := tl.serverInfoCache[serverName]
+	si, ok := serverInfoCache[serverName]
 	if ok {
 		protocol, ok := si.protocols.getFirst(alpnProtocols)
 		if ok || protocol == "" {
@@ -140,10 +155,9 @@ func (tl *tlsListener) handshakeWithServer(conn net.Conn, msg *clientHelloMsg) (
 		si = serverInfo{protocols: make(supportedProtocolMap)}
 	}
 
-	addr := conn.LocalAddr()
 	var clientConfig *tls.Config
-	if tl.config.GetClientConfig != nil {
-		clientConfig = tl.config.GetClientConfig(serverName, alpnProtocols)
+	if c.config.GetClientConfig != nil {
+		clientConfig = c.config.GetClientConfig(serverName, alpnProtocols)
 	} else {
 		clientConfig = &tls.Config{
 			ServerName: serverName,
@@ -151,7 +165,8 @@ func (tl *tlsListener) handshakeWithServer(conn net.Conn, msg *clientHelloMsg) (
 		}
 	}
 
-	tc, err := tls.Dial("tcp", addr.String(), clientConfig)
+	addr := c.dstAddr
+	tc, err := tls.Dial("tcp", addr, clientConfig)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to dial to %v(%v): %w", serverName, addr, err)
 	}
@@ -183,13 +198,10 @@ func (tl *tlsListener) handshakeWithServer(conn net.Conn, msg *clientHelloMsg) (
 		si.protocols[p] = false
 	}
 	si.protocols[negotiatedProtocol] = true
-	tl.serverInfoCache[serverName] = si
+	serverInfoCache[serverName] = si
 
 	return si.certificate, state.NegotiatedProtocol, nil
 }
-
-func (tl *tlsListener) Close() error   { return tl.listener.Close() }
-func (tl *tlsListener) Addr() net.Addr { return tl.listener.Addr() }
 
 const (
 	recordHeaderLen     = 5
@@ -201,8 +213,8 @@ var (
 	errInvalidClientHello   = errors.New("invalid ClientHello")
 )
 
-func peekClientHello(conn PeekReader, msg *clientHelloMsg) error {
-	hdr, err := conn.Peek(recordHeaderLen)
+func peekClientHello(r PeekReader, msg *clientHelloMsg) error {
+	hdr, err := r.Peek(recordHeaderLen)
 	if err != nil {
 		return err
 	}
@@ -215,7 +227,7 @@ func peekClientHello(conn PeekReader, msg *clientHelloMsg) error {
 	}
 	n := int(hdr[3])<<8 | int(hdr[4])
 
-	fragment, err := conn.Peek(n)
+	fragment, err := r.Peek(n)
 	if err != nil {
 		return fmt.Errorf("failed to read the fragment: %w", err)
 	}

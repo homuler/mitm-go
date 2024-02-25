@@ -14,14 +14,14 @@ import (
 	"github.com/quic-go/quic-go/http3"
 )
 
-type connKey struct{}
+type destinationKey struct{}
 
-func getProxyConn(r *http.Request) mitmhttp.ProxyConn {
-	return r.Context().Value(connKey{}).(mitmhttp.ProxyConn)
+func getDestination(r *http.Request) string {
+	return r.Context().Value(destinationKey{}).(string)
 }
 
-func withQUICConn(ctx context.Context, c quic.Connection) context.Context {
-	return context.WithValue(ctx, connKey{}, c)
+func tproxyConnContext(ctx context.Context, c quic.Connection) context.Context {
+	return context.WithValue(ctx, destinationKey{}, c.LocalAddr().String())
 }
 
 type tproxyHandler struct {
@@ -31,8 +31,8 @@ type tproxyHandler struct {
 var _ http.Handler = (*tproxyHandler)(nil)
 
 func (h *tproxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	conn := getProxyConn(r)
-	proxyReq := mitmhttp.CopyAsProxyRequest(r, conn)
+	dest := getDestination(r)
+	proxyReq := mitmhttp.CopyAsProxyRequest(r, dest)
 	h.handler.ServeHTTP(w, proxyReq)
 }
 
@@ -121,7 +121,7 @@ func AdditionalSettings(v map[uint64]uint64) ProxyServerOption {
 func ConnContext(f func(ctx context.Context, c quic.Connection) context.Context) ProxyServerOption {
 	return func(psrv *ProxyServer) error {
 		psrv.server.ConnContext = func(ctx context.Context, c quic.Connection) context.Context {
-			return f(withQUICConn(ctx, c), c)
+			return f(tproxyConnContext(ctx, c), c)
 		}
 		return nil
 	}
@@ -155,8 +155,8 @@ func GetClientConfig(f func(serverName string, alpnProtocols []string) *tls.Conf
 func NewTProxyServer(opts ...ProxyServerOption) *ProxyServer {
 	psrv := &ProxyServer{
 		server: &http3.Server{
-			Handler:     mitmhttp.RoundTripHandler,
-			ConnContext: withQUICConn,
+			Handler:     mitmhttp.RoundTripHandlerFunc,
+			ConnContext: tproxyConnContext,
 		},
 	}
 	for _, opt := range opts {
