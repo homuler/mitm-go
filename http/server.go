@@ -266,7 +266,8 @@ func NewTProxyServer(rootCert tls.Certificate, options ...ProxyServerOption) TPr
 		server: &http.Server{
 			Handler: RoundTripHandlerFunc,
 		},
-		rootCert: rootCert,
+		nextProtos: []string{"h2", "http/1.1"},
+		rootCert:   rootCert,
 	}
 	for _, opt := range options {
 		opt(psrv)
@@ -286,13 +287,9 @@ func NewTProxyServer(rootCert tls.Certificate, options ...ProxyServerOption) TPr
 }
 
 func (psrv TProxyServer) ServeTLS(l net.Listener) error {
-	nextProtos := psrv.nextProtos
-	if len(nextProtos) == 0 {
-		nextProtos = []string{"h2", "http/1.1"}
-	}
 	tl := mitm.NewTLSListener(l, &mitm.TLSConfig{
 		RootCertificate: &psrv.rootCert,
-		NextProtos:      nextProtos,
+		NextProtos:      psrv.nextProtos,
 	})
 	return psrv.server.Serve(tl)
 }
