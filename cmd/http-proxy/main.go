@@ -9,7 +9,6 @@ import (
 
 	"github.com/homuler/mitm-proxy-go"
 	mitmhttp "github.com/homuler/mitm-proxy-go/http"
-	"github.com/homuler/mitm-proxy-go/tproxy"
 )
 
 func main() {
@@ -21,13 +20,13 @@ func main() {
 	mitmHttpServer := mitmhttp.NewProxyServer(rootCert)
 	mitmHttpsServer := mitmhttp.NewProxyServer(rootCert)
 
-	httpLn, err := tproxy.ListenTCP("tcp", &net.TCPAddr{IP: net.ParseIP("0.0.0.0"), Port: 8080})
+	httpLn, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.ParseIP("0.0.0.0"), Port: 8080})
 	if err != nil {
 		panic(err)
 	}
 	defer httpLn.Close()
 
-	httpsLn, err := tproxy.ListenTCP("tcp", &net.TCPAddr{IP: net.ParseIP("0.0.0.0"), Port: 8443})
+	httpsLn, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.ParseIP("0.0.0.0"), Port: 8443})
 	if err != nil {
 		panic(err)
 	}
