@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"slices"
+	"sync"
 )
 
 type supportedProtocolMap map[string]bool
@@ -56,6 +57,13 @@ type tlsListener struct {
 
 var _ net.Listener = (*tlsListener)(nil)
 
+var defaultBufferPool = sync.Pool{
+	New: func() interface{} {
+		buf := make([]byte, 0)
+		return &buf
+	},
+}
+
 // NewTLSListener returns a new net.Listener that listens for incoming TLS connections on l.
 func NewTLSListener(l net.Listener, config *TLSConfig) net.Listener {
 	return &tlsListener{
@@ -72,8 +80,7 @@ func (tl *tlsListener) Accept() (net.Conn, error) {
 		return nil, err
 	}
 
-	// TODO: use buffer pool
-	return NewTLSServerConnWithBuffer(c, c.LocalAddr().String(), tl.config, tl.serverInfoCache, nil)
+	return NewTLSServerConn(c, c.LocalAddr().String(), tl.config, tl.serverInfoCache)
 }
 
 func (tl *tlsListener) Close() error   { return tl.listener.Close() }
@@ -93,12 +100,13 @@ type tlsConn struct {
 	config  *TLSConfig
 }
 
-func NewTLSServerConnWithBuffer(conn net.Conn, dstAddr string, config *TLSConfig, serverInfoCache ServerInfoCache, buffer []byte) (*tls.Conn, error) {
+func NewTLSServerConn(conn net.Conn, dstAddr string, config *TLSConfig, serverInfoCache ServerInfoCache) (*tls.Conn, error) {
 	if config.RootCertificate == nil {
 		return nil, ErrMissingRootCertificate
 	}
 
-	c := newTlsConn(conn, dstAddr, config, buffer)
+	bufPtr := defaultBufferPool.Get().(*[]byte)
+	c := newTlsConn(conn, dstAddr, config, (*bufPtr)[0:0])
 	clientHello := &clientHelloMsg{}
 
 	err := peekClientHello(c.reader, clientHello)
@@ -125,18 +133,17 @@ func NewTLSServerConnWithBuffer(conn net.Conn, dstAddr string, config *TLSConfig
 	if err != nil {
 		return nil, fmt.Errorf("failed to seek the reader: %w", err)
 	}
-	return tls.Server(NewProxyConn(c.conn, dstAddr, TamperConnRead(c.reader.OneTimeReader().Read)), serverConfig), nil
-}
-
-func NewTLSServerConn(conn net.Conn, dstAddr string, config *TLSConfig, serverInfoCache ServerInfoCache) (*tls.Conn, error) {
-	return NewTLSServerConnWithBuffer(conn, dstAddr, config, serverInfoCache, nil)
+	proxyConn := NewProxyConn(c.conn, dstAddr,
+		TamperConnRead(c.reader.OneTimeReader().Read),
+		TamperConnClose(func() error {
+			*bufPtr = c.reader.buf
+			defaultBufferPool.Put(bufPtr)
+			return nil
+		}))
+	return tls.Server(proxyConn, serverConfig), nil
 }
 
 func newTlsConn(conn net.Conn, dstAddr string, config *TLSConfig, buffer []byte) *tlsConn {
-	if len(buffer) == 0 {
-		buffer = make([]byte, 1024)
-	}
-
 	return &tlsConn{
 		conn:    conn,
 		dstAddr: dstAddr,
