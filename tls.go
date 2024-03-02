@@ -125,8 +125,7 @@ func NewTLSServerConnWithBuffer(conn net.Conn, dstAddr string, config *TLSConfig
 	if err != nil {
 		return nil, fmt.Errorf("failed to seek the reader: %w", err)
 	}
-	reader := io.MultiReader(c.reader.Memorized(), c.conn)
-	return tls.Server(NewProxyConn(c.conn, dstAddr, TamperConnRead(reader.Read)), serverConfig), nil
+	return tls.Server(NewProxyConn(c.conn, dstAddr, TamperConnRead(c.reader.OneTimeReader().Read)), serverConfig), nil
 }
 
 func NewTLSServerConn(conn net.Conn, dstAddr string, config *TLSConfig, serverInfoCache ServerInfoCache) (*tls.Conn, error) {
@@ -228,8 +227,8 @@ var (
 	errInvalidClientHello   = errors.New("invalid ClientHello")
 )
 
-func peekClientHello(r PeekSeeker, msg *clientHelloMsg) error {
-	hdr, err := r.Peek(recordHeaderLen)
+func peekClientHello(r *memorizingReader, msg *clientHelloMsg) error {
+	hdr, err := r.Next(recordHeaderLen)
 	if err != nil {
 		return err
 	}
@@ -242,8 +241,7 @@ func peekClientHello(r PeekSeeker, msg *clientHelloMsg) error {
 	}
 	n := int(hdr[3])<<8 | int(hdr[4])
 
-	r.Seek(int64(len(hdr)), io.SeekCurrent)
-	fragment, err := r.Peek(n)
+	fragment, err := r.Next(n)
 	if err != nil {
 		return fmt.Errorf("failed to read the fragment: %w", err)
 	}

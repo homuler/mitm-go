@@ -6,20 +6,6 @@ import (
 	"io"
 )
 
-type Peeker interface {
-	Peek(n int) ([]byte, error)
-}
-
-type PeekSeeker interface {
-	Peeker
-	io.Seeker
-}
-
-type PeekReadSeeker interface {
-	Peeker
-	io.ReadSeeker
-}
-
 // memorizingReader is a reader that memorizes the read bytes.
 // After reading, you can seek back to the position that has been read and read from there again.
 type memorizingReader struct {
@@ -30,7 +16,7 @@ type memorizingReader struct {
 	eof  bool
 }
 
-var _ PeekReadSeeker = &memorizingReader{}
+var _ io.ReadSeeker = &memorizingReader{}
 
 // NewMemorizingReader returns a new memorizingReader.
 func NewMemorizingReader(r io.Reader, buf []byte) *memorizingReader {
@@ -70,6 +56,13 @@ func (mr *memorizingReader) readBuf(p []byte) int {
 	n := copy(p, mr.buf[mr.r:mr.w])
 	mr.r += n
 	return n
+}
+
+// Next returns the next n bytes, advancing the reader.
+func (mr *memorizingReader) Next(n int) ([]byte, error) {
+	bs, err := mr.Peek(n)
+	mr.r += len(bs)
+	return bs, err
 }
 
 // Peek returns the next n bytes without advancing the reader.
@@ -155,10 +148,18 @@ func (mr *memorizingReader) Forget(n int) (s int) {
 	return s
 }
 
-// Memorized returns a reader that reads the memorized bytes from the current position if any.
+// Memorized returns the memorized bytes from the current position.
 // Note that to read from the beginning, you need to call Seek(0, io.SeekStart) first.
-func (mr *memorizingReader) Memorized() io.Reader {
-	return bytes.NewReader(mr.buf[mr.r:mr.w])
+func (mr *memorizingReader) Memorized() []byte {
+	return mr.buf[mr.r:mr.w]
+}
+
+// OneTimeReader returns a reader that reads the data from the current position without memorizing.
+func (mr *memorizingReader) OneTimeReader() io.Reader {
+	if mr.Buffered() == 0 {
+		return mr.rd
+	}
+	return io.MultiReader(bytes.NewReader(mr.Memorized()), mr.rd)
 }
 
 func (mr *memorizingReader) available() int {

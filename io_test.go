@@ -205,10 +205,7 @@ func TestMemorizingReader_Read_after_Peek_does_not_corrupt_the_buffer(t *testing
 
 	_, err = mr.Seek(0, io.SeekStart)
 	require.NoError(t, err)
-
-	memorized, err := io.ReadAll(mr.Memorized())
-	require.NoError(t, err)
-	assert.Equal(t, str, string(memorized))
+	assert.Equal(t, str, string(mr.Memorized()))
 }
 
 func TestMemorizingReader_Peek_returns_error_when_failed_to_read_the_specified_number_of_bytes(t *testing.T) {
@@ -349,10 +346,7 @@ func TestMemorizingReader_Memorized(t *testing.T) {
 
 			_, err = mr.Seek(int64(c.start), io.SeekStart)
 			require.NoError(t, err)
-
-			bs, err := io.ReadAll(mr.Memorized())
-			require.NoError(t, err)
-			assert.Equal(t, str[c.start:c.end], string(bs))
+			assert.Equal(t, str[c.start:c.end], string(mr.Memorized()))
 		})
 	}
 }
@@ -428,9 +422,7 @@ func TestMemorizingReader_Forget(t *testing.T) {
 			_, err = mr.Seek(0, io.SeekStart)
 			require.NoError(t, err)
 
-			bs, err := io.ReadAll(mr.Memorized())
-			require.NoError(t, err)
-			assert.Equal(t, str[c.expectedStart:], string(bs))
+			assert.Equal(t, str[c.expectedStart:], string(mr.Memorized()))
 		})
 	}
 }
@@ -439,7 +431,6 @@ func Example_memorizingReader_Memorized() {
 	mr := mitm.NewMemorizingReader(strings.NewReader("Hello, World!"), nil)
 	io.ReadAll(mr)
 	mr.Seek(0, io.SeekStart)
-	bs, _ := io.ReadAll(mr.Memorized())
-	fmt.Println(string(bs))
+	fmt.Println(string(mr.Memorized()))
 	// Output: Hello, World!
 }
