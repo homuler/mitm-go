@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/homuler/mitm-proxy-go"
 )
@@ -36,4 +38,47 @@ func Example_memorizingReader_OneTimeReader() {
 	// Output:
 	// Hello
 	// Hello, World!
+}
+
+func processListener(ln net.Listener) error {
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			return err
+		}
+		go func() {
+			defer conn.Close()
+
+			io.Copy(os.Stdout, conn)
+		}()
+	}
+}
+
+func ExampleOneTimeListener() {
+	server, client := net.Pipe()
+
+	done := make(chan struct{})
+	sconn := mitm.NewTamperedConn(server, mitm.TamperConnClose(func() error {
+		close(done)
+		return nil
+	}))
+	// when an existing API demands a net.Listener instead of a net.Conn, you can use OneTimeListener.
+	ln := mitm.NewOneTimeListener(sconn)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	go func() {
+		processListener(ln)
+		wg.Done()
+	}()
+
+	client.Write([]byte("Hello"))
+	client.Close()
+	<-done
+	ln.Close()
+
+	wg.Wait()
+	// Output:
+	// Hello
 }
