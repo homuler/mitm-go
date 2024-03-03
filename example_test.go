@@ -1,6 +1,7 @@
 package mitm_test
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"log"
@@ -40,6 +41,34 @@ func Example_memorizingReader_OneTimeReader() {
 	// Hello, World!
 }
 
+func ExampleNewTamperedConn() {
+	server, client := net.Pipe()
+
+	done := make(chan struct{})
+	sconn := mitm.NewTamperedConn(server,
+		mitm.TamperConnRead(func(bs []byte) (int, error) {
+			n, err := server.Read(bs)
+			// echo to stdout
+			io.CopyN(os.Stdout, bytes.NewReader(bs), int64(n))
+			return n, err
+		}),
+		mitm.TamperConnClose(func() error {
+			err := server.Close()
+			close(done)
+			return err
+		}))
+
+	go func() {
+		defer sconn.Close()
+		io.Copy(io.Discard, sconn)
+	}()
+
+	client.Write([]byte("Hello, World!\n"))
+	client.Close()
+	<-done
+	// Output: Hello, World!
+}
+
 func processListener(ln net.Listener) error {
 	for {
 		conn, err := ln.Accept()
@@ -59,8 +88,9 @@ func ExampleOneTimeListener() {
 
 	done := make(chan struct{})
 	sconn := mitm.NewTamperedConn(server, mitm.TamperConnClose(func() error {
+		err := server.Close()
 		close(done)
-		return nil
+		return err
 	}))
 	// when an existing API demands a net.Listener instead of a net.Conn, you can use OneTimeListener.
 	ln := mitm.NewOneTimeListener(sconn)
