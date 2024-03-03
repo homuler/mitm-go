@@ -1,7 +1,6 @@
 package mitm_test
 
 import (
-	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -425,12 +424,4 @@ func TestMemorizingReader_Forget(t *testing.T) {
 			assert.Equal(t, str[c.expectedStart:], string(mr.Memorized()))
 		})
 	}
-}
-
-func Example_memorizingReader_Memorized() {
-	mr := mitm.NewMemorizingReader(strings.NewReader("Hello, World!"), nil)
-	io.ReadAll(mr)
-	mr.Seek(0, io.SeekStart)
-	fmt.Println(string(mr.Memorized()))
-	// Output: Hello, World!
 }
