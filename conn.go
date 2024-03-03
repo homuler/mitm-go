@@ -98,10 +98,41 @@ func TamperConnSetWriteDeadline(f func(t time.Time) error) TamperedConnOption {
 	}
 }
 
+var (
+	fallbackConnRead             = func(b []byte) (int, error) { return 0, net.ErrClosed }
+	fallbackConnWrite            = func(b []byte) (int, error) { return 0, net.ErrClosed }
+	fallbackConnClose            = func() error { return nil }
+	fallbackConnLocalAddr        = func() net.Addr { return &net.IPAddr{} }
+	fallbackConnRemoteAddr       = func() net.Addr { return &net.IPAddr{} }
+	fallbackConnSetDeadline      = func(t time.Time) error { return net.ErrClosed }
+	fallbackConnSetReadDeadline  = func(t time.Time) error { return net.ErrClosed }
+	fallbackConnSetWriteDeadline = func(t time.Time) error { return net.ErrClosed }
+)
+
 // NewTamperedConn returns a new [TamperedConn].
 // opts is used to change the behaviour of the underlying [net.Conn].
 func NewTamperedConn(conn net.Conn, opts ...TamperedConnOption) *TamperedConn {
-	c := &TamperedConn{
+	c := newTamperedConn(conn)
+	for _, opt := range opts {
+		_ = opt(c)
+	}
+	return c
+}
+
+func newTamperedConn(conn net.Conn) *TamperedConn {
+	if conn == nil {
+		return &TamperedConn{
+			read:             fallbackConnRead,
+			write:            fallbackConnWrite,
+			close:            fallbackConnClose,
+			localAddr:        fallbackConnLocalAddr,
+			remoteAddr:       fallbackConnRemoteAddr,
+			setDeadline:      fallbackConnSetDeadline,
+			setReadDeadline:  fallbackConnSetReadDeadline,
+			setWriteDeadline: fallbackConnSetWriteDeadline,
+		}
+	}
+	return &TamperedConn{
 		read:             conn.Read,
 		write:            conn.Write,
 		close:            conn.Close,
@@ -111,10 +142,6 @@ func NewTamperedConn(conn net.Conn, opts ...TamperedConnOption) *TamperedConn {
 		setReadDeadline:  conn.SetReadDeadline,
 		setWriteDeadline: conn.SetWriteDeadline,
 	}
-	for _, opt := range opts {
-		_ = opt(c)
-	}
-	return c
 }
 
 func (c *TamperedConn) Read(b []byte) (int, error)  { return c.read(b) }
