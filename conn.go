@@ -15,6 +15,8 @@ func init() {
 	close(closedchan)
 }
 
+// TamperedConn is a [net.Conn] that can be tampered.
+// Every [net.Conn] method can be replaced with a custom implementation.
 type TamperedConn struct {
 	read             func(b []byte) (int, error)
 	write            func(b []byte) (int, error)
@@ -32,6 +34,7 @@ var _ net.Conn = (*TamperedConn)(nil)
 
 type TamperedConnOption func(*TamperedConn) error
 
+// TamperConnRead replaces the [net.Conn.Read] method with f.
 func TamperConnRead(f func(b []byte) (int, error)) TamperedConnOption {
 	return func(c *TamperedConn) error {
 		c.read = f
@@ -39,6 +42,7 @@ func TamperConnRead(f func(b []byte) (int, error)) TamperedConnOption {
 	}
 }
 
+// TamperConnWrite replaces the [net.Conn.Write] method with f.
 func TamperConnWrite(f func(b []byte) (int, error)) TamperedConnOption {
 	return func(c *TamperedConn) error {
 		c.write = f
@@ -46,6 +50,7 @@ func TamperConnWrite(f func(b []byte) (int, error)) TamperedConnOption {
 	}
 }
 
+// TamperConnClose replaces the [net.Conn.Close] method with f.
 func TamperConnClose(f func() error) TamperedConnOption {
 	return func(c *TamperedConn) error {
 		c.close = f
@@ -53,6 +58,7 @@ func TamperConnClose(f func() error) TamperedConnOption {
 	}
 }
 
+// TamperConnLocalAddr replaces the [net.Conn.LocalAddr] method with f.
 func TamperConnLocalAddr(f func() net.Addr) TamperedConnOption {
 	return func(c *TamperedConn) error {
 		c.localAddr = f
@@ -60,6 +66,7 @@ func TamperConnLocalAddr(f func() net.Addr) TamperedConnOption {
 	}
 }
 
+// TamperConnRemoteAddr replaces the [net.Conn.RemoteAddr] method with f.
 func TamperConnRemoteAddr(f func() net.Addr) TamperedConnOption {
 	return func(c *TamperedConn) error {
 		c.remoteAddr = f
@@ -67,6 +74,7 @@ func TamperConnRemoteAddr(f func() net.Addr) TamperedConnOption {
 	}
 }
 
+// TamperConnSetDeadline replaces the [net.Conn.SetDeadline] method with f.
 func TamperConnSetDeadline(f func(t time.Time) error) TamperedConnOption {
 	return func(c *TamperedConn) error {
 		c.setDeadline = f
@@ -74,6 +82,7 @@ func TamperConnSetDeadline(f func(t time.Time) error) TamperedConnOption {
 	}
 }
 
+// TamperConnSetReadDeadline replaces the [net.Conn.SetReadDeadline] method with f.
 func TamperConnSetReadDeadline(f func(t time.Time) error) TamperedConnOption {
 	return func(c *TamperedConn) error {
 		c.setReadDeadline = f
@@ -81,6 +90,7 @@ func TamperConnSetReadDeadline(f func(t time.Time) error) TamperedConnOption {
 	}
 }
 
+// TamperConnSetWriteDeadline replaces the [net.Conn.SetWriteDeadline] method with f.
 func TamperConnSetWriteDeadline(f func(t time.Time) error) TamperedConnOption {
 	return func(c *TamperedConn) error {
 		c.setWriteDeadline = f
@@ -88,6 +98,8 @@ func TamperConnSetWriteDeadline(f func(t time.Time) error) TamperedConnOption {
 	}
 }
 
+// NewTamperedConn returns a new [TamperedConn].
+// opts is used to change the behaviour of the underlying [net.Conn].
 func NewTamperedConn(conn net.Conn, opts ...TamperedConnOption) *TamperedConn {
 	c := &TamperedConn{
 		read:             conn.Read,
@@ -119,6 +131,7 @@ func (c *TamperedConn) SetDeadline(t time.Time) error      { return c.setDeadlin
 func (c *TamperedConn) SetReadDeadline(t time.Time) error  { return c.setReadDeadline(t) }
 func (c *TamperedConn) SetWriteDeadline(t time.Time) error { return c.setWriteDeadline(t) }
 
+// ProxyConn is a [TamperedConn] that has a destination address.
 type ProxyConn struct {
 	*TamperedConn
 	dstAddr string
@@ -126,6 +139,9 @@ type ProxyConn struct {
 
 var _ net.Conn = (*ProxyConn)(nil)
 
+// NewProxyConn returns a new [ProxyConn].
+// dstAddr is the destination address of the connection.
+// opts is used to change the behaviour of the underlying [TamperedConn].
 func NewProxyConn(conn net.Conn, dstAddr string, opts ...TamperedConnOption) *ProxyConn {
 	return &ProxyConn{
 		TamperedConn: NewTamperedConn(conn, opts...),
@@ -133,10 +149,14 @@ func NewProxyConn(conn net.Conn, dstAddr string, opts ...TamperedConnOption) *Pr
 	}
 }
 
+// Destination returns the destination address of the connection.
 func (c *ProxyConn) Destination() string {
 	return c.dstAddr
 }
 
+// OneTimeListener is a [net.Listener] that accepts only one connection.
+// It is useful when an existing API demands a [net.Listener] instead of a [net.Conn], but you want to serve only one connection.
+// After the first call to [Accept], all subsequent calls will be blocked until [Close] is called.
 type OneTimeListener struct {
 	conn     net.Conn
 	accepted atomic.Bool
@@ -148,6 +168,7 @@ type OneTimeListener struct {
 
 var _ net.Listener = (*OneTimeListener)(nil)
 
+// NewOneTimeListener returns a new [OneTimeListener].
 func NewOneTimeListener(conn net.Conn) *OneTimeListener {
 	return &OneTimeListener{
 		conn: conn,
@@ -155,6 +176,8 @@ func NewOneTimeListener(conn net.Conn) *OneTimeListener {
 	}
 }
 
+// Accept returns the underlying connection if it has not been accepted yet.
+// Otherwise, it blocks until [Close] is called.
 func (l *OneTimeListener) Accept() (net.Conn, error) {
 	if l.accepted.Load() {
 		<-l.done
@@ -166,6 +189,8 @@ func (l *OneTimeListener) Accept() (net.Conn, error) {
 	return l.Accept()
 }
 
+// Close closes the listener.
+// Any blocked [Accept] calls will be unblocked and return an error.
 func (l *OneTimeListener) Close() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -177,6 +202,7 @@ func (l *OneTimeListener) Close() error {
 	return nil
 }
 
+// Addr returns the local network address of the underlying connection.
 func (l *OneTimeListener) Addr() net.Addr {
 	return l.conn.LocalAddr()
 }
