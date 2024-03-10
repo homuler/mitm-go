@@ -111,7 +111,7 @@ func (h *proxyHandler) serveInnerConn(conn net.Conn, dstAddr string) error {
 			return nil
 		}))
 
-	tlsConn, err := mitm.NewTLSServerConn(tc, dstAddr, h.tlsConfig, h.serverInfoCache)
+	tlsConn, err := mitm.NewTLSServer(tc, dstAddr, h.tlsConfig, h.serverInfoCache)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrProxyInternal, err)
 	}

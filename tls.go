@@ -80,7 +80,7 @@ func (tl *tlsListener) Accept() (net.Conn, error) {
 		return nil, err
 	}
 
-	return NewTLSServerConn(c, c.LocalAddr().String(), tl.config, tl.serverInfoCache)
+	return NewTLSServer(c, c.LocalAddr().String(), tl.config, tl.serverInfoCache)
 }
 
 func (tl *tlsListener) Close() error   { return tl.listener.Close() }
@@ -100,7 +100,7 @@ type tlsConn struct {
 	config  *TLSConfig
 }
 
-func NewTLSServerConn(conn net.Conn, dstAddr string, config *TLSConfig, serverInfoCache ServerInfoCache) (*tls.Conn, error) {
+func NewTLSServer(conn net.Conn, dstAddr string, config *TLSConfig, serverInfoCache ServerInfoCache) (*tls.Conn, error) {
 	if config.RootCertificate == nil {
 		return nil, ErrMissingRootCertificate
 	}
