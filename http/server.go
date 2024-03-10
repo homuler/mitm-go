@@ -287,10 +287,13 @@ func NewTProxyServer(rootCert tls.Certificate, options ...ProxyServerOption) TPr
 }
 
 func (psrv TProxyServer) ServeTLS(l net.Listener) error {
-	tl := mitm.NewTLSListener(l, &mitm.TLSConfig{
+	tl, err := mitm.NewTLSListener(l, &mitm.TLSConfig{
 		RootCertificate: &psrv.rootCert,
 		NextProtos:      psrv.nextProtos,
 	})
+	if err != nil {
+		return err
+	}
 	return psrv.server.Serve(tl)
 }
 

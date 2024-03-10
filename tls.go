@@ -48,6 +48,26 @@ type TLSConfig struct {
 	GetClientConfig func(serverName string, alpnProtocols []string) *tls.Config
 }
 
+var (
+	ErrMissingRootCertificate = errors.New("TLSConfig: RootCertificate is required")
+)
+
+func (c *TLSConfig) clone() *TLSConfig {
+	return &TLSConfig{
+		RootCertificate: c.RootCertificate,
+		NextProtos:      c.NextProtos,
+		GetServerConfig: c.GetServerConfig,
+		GetClientConfig: c.GetClientConfig,
+	}
+}
+
+func (c *TLSConfig) validateForListener() error {
+	if c.RootCertificate == nil {
+		return ErrMissingRootCertificate
+	}
+	return nil
+}
+
 type tlsListener struct {
 	listener net.Listener
 	config   *TLSConfig
@@ -65,13 +85,16 @@ var defaultBufferPool = sync.Pool{
 }
 
 // NewTLSListener returns a new net.Listener that listens for incoming TLS connections on l.
-func NewTLSListener(l net.Listener, config *TLSConfig) net.Listener {
+func NewTLSListener(l net.Listener, config *TLSConfig) (net.Listener, error) {
+	if err := config.validateForListener(); err != nil {
+		return nil, err
+	}
 	return &tlsListener{
 		listener: l,
-		config:   config,
+		config:   config.clone(),
 
 		serverInfoCache: make(ServerInfoCache),
-	}
+	}, nil
 }
 
 func (tl *tlsListener) Accept() (net.Conn, error) {
@@ -87,8 +110,6 @@ func (tl *tlsListener) Close() error   { return tl.listener.Close() }
 func (tl *tlsListener) Addr() net.Addr { return tl.listener.Addr() }
 
 var (
-	ErrMissingRootCertificate = errors.New("config.RootCertificate is required")
-
 	ErrPeekClientHello     = errors.New("failed to peek client hello")
 	ErrHandshakeWithServer = errors.New("failed to handshake with the server")
 )
