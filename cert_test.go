@@ -15,31 +15,41 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var rootCACert *tls.Certificate
+var (
+	mitmCACert *tls.Certificate
+	rootCACert *tls.Certificate
+)
 
 func init() {
-	cert, err := mitm.CreateCACert(pkix.Name{}, 1*time.Hour)
+	mitmCACert = loadCACert(pkix.Name{CommonName: "mitm-go"}, 1*time.Hour)
+	rootCACert = loadCACert(pkix.Name{CommonName: "root"}, 1*time.Hour)
+}
+
+func loadCACert(subject pkix.Name, duretion time.Duration) *tls.Certificate {
+	cert, err := mitm.CreateCACert(subject, duretion)
 	if err != nil {
-		return
+		return nil
 	}
-	rootCACert = &cert
-	rootCACert.Leaf, _ = x509.ParseCertificate(rootCACert.Certificate[0])
+	cert.Leaf, err = x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		return nil
+	}
+	return &cert
 }
 
 func TestForgeCertificate(t *testing.T) {
 	t.Parallel()
 
-	if rootCACert == nil {
-		t.Fatal("rootCACert is not initialized")
+	if mitmCACert == nil {
+		t.Fatal("mitmCACert is not initialized")
 	}
 
 	dnsName := "example.com"
 	dummyCert := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		Subject: pkix.Name{
-			CommonName:   fmt.Sprintf("*.%s", dnsName),
-			Organization: []string{"mitm-go"},
-			Country:      []string{"JP"},
+			CommonName: fmt.Sprintf("*.%s", dnsName),
+			Country:    []string{"JP"},
 		},
 		NotBefore:             time.Now(),
 		NotAfter:              time.Now().Add(1 * time.Hour),
@@ -51,14 +61,14 @@ func TestForgeCertificate(t *testing.T) {
 		DNSNames: []string{dnsName},
 	}
 
-	cert, err := mitm.ForgeCertificate(rootCACert, dummyCert)
+	cert, err := mitm.ForgeCertificate(mitmCACert, dummyCert)
 	require.NoError(t, err)
 
 	cert.Leaf, err = x509.ParseCertificate(cert.Certificate[0])
 	require.NoError(t, err)
 
 	certPool := x509.NewCertPool()
-	certPool.AddCert(rootCACert.Leaf)
+	certPool.AddCert(mitmCACert.Leaf)
 
 	_, err = cert.Leaf.Verify(x509.VerifyOptions{
 		DNSName: "example.com",
