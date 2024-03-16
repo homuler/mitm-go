@@ -234,13 +234,8 @@ func (c *tlsConn) handshakeWithServer(dstAddr net.Addr, msg *clientHelloMsg, ser
 
 	tc, err := tls.Dial(dstAddr.Network(), dstAddr.String(), clientConfig)
 	if err != nil {
-		return nil, "", fmt.Errorf("failed to dial to %v(%v): %w", serverName, dstAddr, err)
+		return nil, "", fmt.Errorf("failed to dial %v(%v): %w", serverName, dstAddr, err)
 	}
-
-	if err := tc.Handshake(); err != nil {
-		return nil, "", fmt.Errorf("failed to handshake with %v(%v): %w", serverName, dstAddr, err)
-	}
-
 	state := tc.ConnectionState()
 
 	if si.certificate == nil {
