@@ -66,7 +66,7 @@ func (c *TLSConfig) Clone() *TLSConfig {
 	}
 }
 
-func (c *TLSConfig) validateForListener() error {
+func (c *TLSConfig) validate() error {
 	if c.RootCertificate == nil {
 		return ErrMissingRootCertificate
 	}
@@ -89,26 +89,40 @@ var defaultBufferPool = sync.Pool{
 	},
 }
 
+var defaultGetDestination = func(conn net.Conn, serverName string) net.Addr {
+	return &addr{network: conn.LocalAddr().Network(), str: serverName}
+}
+
 // NewTLSListener returns a new net.Listener that listens for incoming TLS connections on l.
 func NewTLSListener(l net.Listener, config *TLSConfig) (net.Listener, error) {
-	if err := config.validateForListener(); err != nil {
+	if err := config.validate(); err != nil {
 		return nil, err
 	}
+
+	if config.GetDestination == nil {
+		config.GetDestination = defaultGetDestination
+	}
+
 	return &tlsListener{
 		listener: l,
-		config:   config.clone(),
+		config:   config.Clone(),
 
 		serverInfoCache: make(ServerInfoCache),
 	}, nil
 }
 
 func (tl *tlsListener) Accept() (net.Conn, error) {
-	c, err := tl.listener.Accept()
+	conn, err := tl.listener.Accept()
 	if err != nil {
 		return nil, err
 	}
 
-	return NewTLSServer(c, c.LocalAddr().String(), tl.config, tl.serverInfoCache)
+	tlsConn, err := newTLSServer(conn, tl.config, tl.serverInfoCache)
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	return tlsConn, nil
 }
 
 func (tl *tlsListener) Close() error   { return tl.listener.Close() }
@@ -125,14 +139,18 @@ type tlsConn struct {
 	config *TLSConfig
 }
 
-func NewTLSServer(conn net.Conn, dstAddr string, config *TLSConfig, serverInfoCache ServerInfoCache) (*tls.Conn, error) {
-	if config.RootCertificate == nil {
-		return nil, ErrMissingRootCertificate
+func NewTLSServer(conn net.Conn, config *TLSConfig, serverInfoCache ServerInfoCache) (*tls.Conn, error) {
+	if err := config.validate(); err != nil {
+		return nil, err
 	}
 	if config.GetDestination == nil {
 		config.GetDestination = defaultGetDestination
 	}
 
+	return newTLSServer(conn, config, serverInfoCache)
+}
+
+func newTLSServer(conn net.Conn, config *TLSConfig, serverInfoCache ServerInfoCache) (*tls.Conn, error) {
 	bufPtr := defaultBufferPool.Get().(*[]byte)
 	c := newTlsConn(conn, config, (*bufPtr)[0:0])
 	clientHello := &clientHelloMsg{}
