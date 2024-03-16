@@ -25,12 +25,12 @@ func GetConn(r *http.Request) (conn net.Conn, ok bool) {
 
 type destinationKey struct{}
 
-func WithDestination(ctx context.Context, dest string) context.Context {
-	return context.WithValue(ctx, destinationKey{}, dest)
+func WithDestination(ctx context.Context, dstAddr net.Addr) context.Context {
+	return context.WithValue(ctx, destinationKey{}, dstAddr)
 }
 
-func GetDestination(r *http.Request) (dest string, ok bool) {
-	dest, ok = r.Context().Value(destinationKey{}).(string)
+func GetDestination(r *http.Request) (dstAddr net.Addr, ok bool) {
+	dstAddr, ok = r.Context().Value(destinationKey{}).(net.Addr)
 	return
 }
 
@@ -258,7 +258,7 @@ type TProxyServer struct {
 }
 
 func tproxyConnContext(ctx context.Context, c net.Conn) context.Context {
-	return WithDestination(ctx, c.LocalAddr().String())
+	return WithDestination(ctx, c.LocalAddr())
 }
 
 func NewTProxyServer(rootCert tls.Certificate, options ...ProxyServerOption) TProxyServer {

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"syscall"
 	"time"
 
@@ -63,7 +64,7 @@ func (h *proxyHandler) handleHTTP1Connect(w http.ResponseWriter, r *http.Request
 		panic(err)
 	}
 
-	err = h.serveInnerConn(conn, r.URL.Host)
+	err = h.serveInnerConn(conn, r.URL)
 	if err != nil {
 		// TODO: log the error
 		panic(err)
@@ -94,13 +95,13 @@ func (h *proxyHandler) handleHTTP2Connect(w http.ResponseWriter, r *http.Request
 		mitm.TamperConnSetReadDeadline(h2rw.SetReadDeadline),
 		mitm.TamperConnSetWriteDeadline(h2rw.SetWriteDeadline))
 
-	if err := h.serveInnerConn(innerConn, r.URL.Host); err != nil {
+	if err := h.serveInnerConn(innerConn, r.URL); err != nil {
 		// TODO: log the error
 		panic(err)
 	}
 }
 
-func (h *proxyHandler) serveInnerConn(conn net.Conn, dstAddr string) error {
+func (h *proxyHandler) serveInnerConn(conn net.Conn, destination *url.URL) error {
 	close := make(chan struct{})
 	tc := mitm.NewTamperedConn(conn,
 		mitm.TamperConnClose(func() error {
@@ -111,7 +112,10 @@ func (h *proxyHandler) serveInnerConn(conn net.Conn, dstAddr string) error {
 			return nil
 		}))
 
-	tlsConn, err := mitm.NewTLSServer(tc, dstAddr, h.tlsConfig, h.serverInfoCache)
+	config := h.tlsConfig.Clone()
+	config.GetDestination = func(net.Conn, string) net.Addr { return &urlAddr{destination} }
+
+	tlsConn, err := mitm.NewTLSServer(tc, config, h.serverInfoCache)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrProxyInternal, err)
 	}
@@ -162,7 +166,7 @@ func (h *tproxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		panic(errors.New("destination is not stored in the context"))
 	}
 
-	proxyReq := CopyAsProxyRequest(r, dest)
+	proxyReq := CopyAsProxyRequest(r, dest.String())
 	h.handler.ServeHTTP(w, proxyReq)
 }
 

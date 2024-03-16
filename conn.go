@@ -15,6 +15,16 @@ func init() {
 	close(closedchan)
 }
 
+type addr struct {
+	network string
+	str     string
+}
+
+var _ net.Addr = (*addr)(nil)
+
+func (a *addr) Network() string { return a.network }
+func (a *addr) String() string  { return a.str }
+
 // TamperedConn is a [net.Conn] that can be tampered.
 // Every [net.Conn] method can be replaced with a custom implementation.
 type TamperedConn struct {
@@ -161,7 +171,7 @@ func (c *TamperedConn) SetWriteDeadline(t time.Time) error { return c.setWriteDe
 // ProxyConn is a [TamperedConn] that has a destination address.
 type ProxyConn struct {
 	*TamperedConn
-	dstAddr string
+	dstAddr net.Addr
 }
 
 var _ net.Conn = (*ProxyConn)(nil)
@@ -169,7 +179,7 @@ var _ net.Conn = (*ProxyConn)(nil)
 // NewProxyConn returns a new [ProxyConn].
 // dstAddr is the destination address of the connection.
 // opts is used to change the behaviour of the underlying [TamperedConn].
-func NewProxyConn(conn net.Conn, dstAddr string, opts ...TamperedConnOption) *ProxyConn {
+func NewProxyConn(conn net.Conn, dstAddr net.Addr, opts ...TamperedConnOption) *ProxyConn {
 	return &ProxyConn{
 		TamperedConn: NewTamperedConn(conn, opts...),
 		dstAddr:      dstAddr,
@@ -177,7 +187,7 @@ func NewProxyConn(conn net.Conn, dstAddr string, opts ...TamperedConnOption) *Pr
 }
 
 // Destination returns the destination address of the connection.
-func (c *ProxyConn) Destination() string {
+func (c *ProxyConn) Destination() net.Addr {
 	return c.dstAddr
 }
 

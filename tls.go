@@ -37,6 +37,10 @@ type TLSConfig struct {
 	// RootCertificate is the root certificate to be used to forge certificates.
 	RootCertificate *tls.Certificate
 
+	// GetDestination optionally specifies a function that returns the destination address of the connection.
+	// If not set, the destination address is determined by the ClientHello message.
+	GetDestination func(conn net.Conn, serverName string) net.Addr
+
 	// NextProtos is a list of supported ALPN protocols.
 	// If it is empty, the client specified list is used to negotiate the protocol with the actual server.
 	NextProtos []string
@@ -52,9 +56,10 @@ var (
 	ErrMissingRootCertificate = errors.New("TLSConfig: RootCertificate is required")
 )
 
-func (c *TLSConfig) clone() *TLSConfig {
+func (c *TLSConfig) Clone() *TLSConfig {
 	return &TLSConfig{
 		RootCertificate: c.RootCertificate,
+		GetDestination:  c.GetDestination,
 		NextProtos:      c.NextProtos,
 		GetServerConfig: c.GetServerConfig,
 		GetClientConfig: c.GetClientConfig,
@@ -115,19 +120,21 @@ var (
 )
 
 type tlsConn struct {
-	conn    net.Conn
-	dstAddr string
-	reader  *memorizingReader
-	config  *TLSConfig
+	conn   net.Conn
+	reader *memorizingReader
+	config *TLSConfig
 }
 
 func NewTLSServer(conn net.Conn, dstAddr string, config *TLSConfig, serverInfoCache ServerInfoCache) (*tls.Conn, error) {
 	if config.RootCertificate == nil {
 		return nil, ErrMissingRootCertificate
 	}
+	if config.GetDestination == nil {
+		config.GetDestination = defaultGetDestination
+	}
 
 	bufPtr := defaultBufferPool.Get().(*[]byte)
-	c := newTlsConn(conn, dstAddr, config, (*bufPtr)[0:0])
+	c := newTlsConn(conn, config, (*bufPtr)[0:0])
 	clientHello := &clientHelloMsg{}
 
 	err := peekClientHello(c.reader, clientHello)
@@ -135,7 +142,8 @@ func NewTLSServer(conn net.Conn, dstAddr string, config *TLSConfig, serverInfoCa
 		return nil, fmt.Errorf("%w: %w", ErrPeekClientHello, err)
 	}
 
-	cert, protocol, err := c.handshakeWithServer(clientHello, serverInfoCache)
+	dstAddr := config.GetDestination(conn, clientHello.serverName)
+	cert, protocol, err := c.handshakeWithServer(dstAddr, clientHello, serverInfoCache)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrHandshakeWithServer, err)
 	}
@@ -164,18 +172,17 @@ func NewTLSServer(conn net.Conn, dstAddr string, config *TLSConfig, serverInfoCa
 	return tls.Server(proxyConn, serverConfig), nil
 }
 
-func newTlsConn(conn net.Conn, dstAddr string, config *TLSConfig, buffer []byte) *tlsConn {
+func newTlsConn(conn net.Conn, config *TLSConfig, buffer []byte) *tlsConn {
 	return &tlsConn{
-		conn:    conn,
-		dstAddr: dstAddr,
-		reader:  NewMemorizingReader(conn, buffer),
-		config:  config,
+		conn:   conn,
+		reader: NewMemorizingReader(conn, buffer),
+		config: config,
 	}
 }
 
 // handshakeWithServer returns a certificate of the server and the negotiated protocol.
 // serverInfoCache will be updated with the result.
-func (c *tlsConn) handshakeWithServer(msg *clientHelloMsg, serverInfoCache ServerInfoCache) (*tls.Certificate, string, error) {
+func (c *tlsConn) handshakeWithServer(dstAddr net.Addr, msg *clientHelloMsg, serverInfoCache ServerInfoCache) (*tls.Certificate, string, error) {
 	serverName := msg.serverName
 	alpnProtocols := msg.alpnProtocols
 	if len(c.config.NextProtos) > 0 {
@@ -207,14 +214,13 @@ func (c *tlsConn) handshakeWithServer(msg *clientHelloMsg, serverInfoCache Serve
 		}
 	}
 
-	addr := c.dstAddr
-	tc, err := tls.Dial("tcp", addr, clientConfig)
+	tc, err := tls.Dial(dstAddr.Network(), dstAddr.String(), clientConfig)
 	if err != nil {
-		return nil, "", fmt.Errorf("failed to dial to %v(%v): %w", serverName, addr, err)
+		return nil, "", fmt.Errorf("failed to dial to %v(%v): %w", serverName, dstAddr, err)
 	}
 
 	if err := tc.Handshake(); err != nil {
-		return nil, "", fmt.Errorf("failed to handshake with %v(%v): %w", serverName, addr, err)
+		return nil, "", fmt.Errorf("failed to handshake with %v(%v): %w", serverName, dstAddr, err)
 	}
 
 	state := tc.ConnectionState()
@@ -223,11 +229,11 @@ func (c *tlsConn) handshakeWithServer(msg *clientHelloMsg, serverInfoCache Serve
 		certs := state.PeerCertificates
 		if len(certs) == 0 {
 			// it should not occur.
-			return nil, "", fmt.Errorf("no certificates of %v(%v) found", serverName, addr)
+			return nil, "", fmt.Errorf("no certificates of %v(%v) found", serverName, dstAddr)
 		}
 		cert, err := ForgeCertificate(c.config.RootCertificate, certs[0])
 		if err != nil {
-			return nil, "", fmt.Errorf("failed to forge a certificate of %v(%v): %w", serverName, addr, err)
+			return nil, "", fmt.Errorf("failed to forge a certificate of %v(%v): %w", serverName, dstAddr, err)
 		}
 		si.certificate = &cert
 	}
