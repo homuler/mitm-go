@@ -213,3 +213,127 @@ func TestNewTLSListner_dials_remote_server(t *testing.T) {
 		})
 	}
 }
+
+func TestNewTLSListner_supports_ALPN(t *testing.T) {
+	t.Parallel()
+
+	if rootCACert == nil {
+		t.Fatal("rootCACert is not initialized")
+	}
+
+	rootCAs := x509.NewCertPool()
+	rootCAs.AddCert(rootCACert.Leaf)
+
+	clientRootCAs := x509.NewCertPool()
+	clientRootCAs.AddCert(mitmCACert.Leaf)
+
+	cases := []struct {
+		name             string
+		serverNextProtos []string
+		mitmNextProtos   []string
+		clientNextProtos []string
+		expectedProto    string
+		err              error
+	}{
+		{
+			name:           "server & client does not support ALPN",
+			mitmNextProtos: []string{"a", "b", "c", "d"},
+			expectedProto:  "",
+		},
+		{
+			name:             "server rejects all",
+			serverNextProtos: []string{"c"},
+			clientNextProtos: []string{"a", "b"},
+			expectedProto:    "",
+			err:              mitm.ErrHandshakeWithServer,
+		},
+		{
+			name:             "server accepts the 2nd",
+			serverNextProtos: []string{"b", "c"},
+			clientNextProtos: []string{"a", "b"},
+			expectedProto:    "b",
+		},
+		{
+			name:             "server accepts the first",
+			serverNextProtos: []string{"a", "b"},
+			clientNextProtos: []string{"a", "b"},
+			expectedProto:    "a",
+		},
+		{
+			name:             "MITM server rejects the first",
+			serverNextProtos: []string{"a", "b"},
+			mitmNextProtos:   []string{"b"},
+			clientNextProtos: []string{"a", "b"},
+			expectedProto:    "b",
+		},
+		{
+			name:             "client does not support ALPN",
+			serverNextProtos: []string{"a", "b"},
+			expectedProto:    "",
+		},
+	}
+
+	for _, c := range cases {
+		c := c
+
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+
+			// start a true server
+			tlsServer, err := newTLSEchoServer("example.com")
+			require.NoError(t, err, "failed to create a TLS echo server")
+
+			serverCert, err := issueCertificate(pkix.Name{CommonName: "example.com"}, []string{tlsServer.addr()})
+			require.NoError(t, err, "failed to issue the server certificate")
+
+			err = tlsServer.start(&tls.Config{
+				Certificates: []tls.Certificate{*serverCert},
+				NextProtos:   c.serverNextProtos,
+			})
+			require.NoError(t, err, "failed to start a TLS echo server")
+			defer tlsServer.close()
+
+			// start an MITM server
+			l, err := net.ListenTCP("tcp", &net.TCPAddr{})
+			require.NoError(t, err, "failed to create an MITM server")
+
+			tl, err := mitm.NewTLSListener(l, &mitm.TLSConfig{
+				RootCertificate: mitmCACert,
+				NextProtos:      c.mitmNextProtos,
+				GetClientConfig: func(serverName string, alpnProtocols []string) *tls.Config {
+					return &tls.Config{ServerName: serverName, RootCAs: rootCAs, NextProtos: alpnProtocols}
+				},
+			})
+			require.NoError(t, err, "failed to create an MITM listener")
+
+			go func() {
+				// only serve the first connection
+				conn, err := tl.Accept()
+				defer tl.Close()
+
+				assert.ErrorIsf(t, err, c.err, "unexpected MITM error")
+
+				if err == nil {
+					io.Copy(io.Discard, conn)
+					conn.Close()
+				}
+			}()
+
+			// a client dials the MITM server
+			mitmAddr := tl.Addr()
+
+			clientConn, err := tls.Dial(mitmAddr.Network(), mitmAddr.String(), &tls.Config{
+				ServerName: tlsServer.addr(),
+				RootCAs:    clientRootCAs,
+				NextProtos: c.clientNextProtos,
+			})
+			if err != nil {
+				assert.NotNilf(t, c.err, "unexpected client error: %v", err)
+				return
+			}
+			defer clientConn.Close()
+
+			assert.Equalf(t, c.expectedProto, clientConn.ConnectionState().NegotiatedProtocol, "unexpected negotiated protocol")
+		})
+	}
+}
