@@ -337,3 +337,96 @@ func TestNewTLSListner_supports_ALPN(t *testing.T) {
 		})
 	}
 }
+
+func TestNewTLSListner_can_serve_different_protocols(t *testing.T) {
+	t.Parallel()
+
+	if rootCACert == nil {
+		t.Fatal("rootCACert is not initialized")
+	}
+
+	rootCAs := x509.NewCertPool()
+	rootCAs.AddCert(rootCACert.Leaf)
+
+	clientRootCAs := x509.NewCertPool()
+	clientRootCAs.AddCert(mitmCACert.Leaf)
+
+	// start a true server
+	tlsServer, err := newTLSEchoServer("example.com")
+	require.NoError(t, err, "failed to create a TLS echo server")
+
+	serverCert, err := issueCertificate(pkix.Name{CommonName: "example.com"}, []string{tlsServer.addr()})
+	require.NoError(t, err, "failed to issue the server certificate")
+
+	err = tlsServer.start(&tls.Config{
+		Certificates: []tls.Certificate{*serverCert},
+		NextProtos:   []string{"a", "b"},
+	})
+	require.NoError(t, err, "failed to start a TLS echo server")
+	defer tlsServer.close()
+
+	// start an MITM server
+	l, err := net.ListenTCP("tcp", &net.TCPAddr{})
+	require.NoError(t, err, "failed to create an MITM server")
+
+	tl, err := mitm.NewTLSListener(l, &mitm.TLSConfig{
+		RootCertificate: mitmCACert,
+		GetClientConfig: func(serverName string, alpnProtocols []string) *tls.Config {
+			return &tls.Config{ServerName: serverName, RootCAs: rootCAs, NextProtos: alpnProtocols}
+		},
+	})
+	require.NoError(t, err, "failed to create an MITM listener")
+
+	go func() {
+		// only serve the first connection
+		for {
+			conn, err := tl.Accept()
+			if err != nil {
+				break
+			}
+			defer conn.Close()
+
+			go io.Copy(io.Discard, conn)
+		}
+	}()
+
+	// multiple client dials the MITM server
+	mitmAddr := tl.Addr()
+
+	cases := []struct {
+		name          string
+		nextProtos    []string
+		expectedProto string
+	}{
+		{
+			name:          "client does not support ALPN",
+			expectedProto: "",
+		},
+		{
+			name:          "client and server agree on the 1st protocol",
+			nextProtos:    []string{"a", "b"},
+			expectedProto: "a",
+		},
+		{
+			name:          "client and server agree on the 2nd protocol",
+			nextProtos:    []string{"c", "b"},
+			expectedProto: "b",
+		},
+	}
+
+	for _, c := range cases {
+		c := c
+
+		t.Run(c.name, func(t *testing.T) {
+			clientConn, err := tls.Dial(mitmAddr.Network(), mitmAddr.String(), &tls.Config{
+				ServerName: tlsServer.addr(),
+				RootCAs:    clientRootCAs,
+				NextProtos: c.nextProtos,
+			})
+			require.NoError(t, err, "failed to dial the MITM server")
+			defer clientConn.Close()
+
+			assert.Equalf(t, c.expectedProto, clientConn.ConnectionState().NegotiatedProtocol, "unexpected negotiated protocol")
+		})
+	}
+}
