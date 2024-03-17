@@ -66,6 +66,18 @@ func (c *TLSConfig) Clone() *TLSConfig {
 	}
 }
 
+func (c *TLSConfig) Normalize() *TLSConfig {
+	c = c.Clone()
+
+	if c.GetDestination == nil {
+		c.GetDestination = defaultGetDestination
+	}
+	if c.GetServerConfig == nil {
+		c.GetServerConfig = defaultGetServerConfig
+	}
+	return c
+}
+
 func (c *TLSConfig) validate() error {
 	if c.RootCertificate == nil {
 		return ErrMissingRootCertificate
@@ -93,19 +105,22 @@ var defaultGetDestination = func(conn net.Conn, serverName string) net.Addr {
 	return &addr{network: conn.LocalAddr().Network(), str: serverName}
 }
 
+var defaultGetServerConfig = func(certificate *tls.Certificate, negotiatedProtocol string) *tls.Config {
+	return &tls.Config{
+		Certificates: []tls.Certificate{*certificate},
+		NextProtos:   []string{negotiatedProtocol},
+	}
+}
+
 // NewTLSListener returns a new net.Listener that listens for incoming TLS connections on l.
 func NewTLSListener(l net.Listener, config *TLSConfig) (net.Listener, error) {
 	if err := config.validate(); err != nil {
 		return nil, err
 	}
 
-	if config.GetDestination == nil {
-		config.GetDestination = defaultGetDestination
-	}
-
 	return &tlsListener{
 		listener: l,
-		config:   config.Clone(),
+		config:   config.Normalize(),
 
 		serverInfoCache: make(ServerInfoCache),
 	}, nil
@@ -143,11 +158,8 @@ func NewTLSServer(conn net.Conn, config *TLSConfig, serverInfoCache ServerInfoCa
 	if err := config.validate(); err != nil {
 		return nil, err
 	}
-	if config.GetDestination == nil {
-		config.GetDestination = defaultGetDestination
-	}
 
-	return newTLSServer(conn, config, serverInfoCache)
+	return newTLSServer(conn, config.Normalize(), serverInfoCache)
 }
 
 func newTLSServer(conn net.Conn, config *TLSConfig, serverInfoCache ServerInfoCache) (*tls.Conn, error) {
@@ -166,15 +178,7 @@ func newTLSServer(conn net.Conn, config *TLSConfig, serverInfoCache ServerInfoCa
 		return nil, fmt.Errorf("%w: %w", ErrHandshakeWithServer, err)
 	}
 
-	var serverConfig *tls.Config
-	if c.config.GetServerConfig != nil {
-		serverConfig = c.config.GetServerConfig(cert, protocol)
-	} else {
-		serverConfig = &tls.Config{
-			Certificates: []tls.Certificate{*cert},
-			NextProtos:   []string{protocol},
-		}
-	}
+	serverConfig := c.config.GetServerConfig(cert, protocol)
 
 	_, err = c.reader.Seek(0, io.SeekStart)
 	if err != nil {
