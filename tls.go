@@ -106,10 +106,15 @@ var defaultGetDestination = func(conn net.Conn, serverName string) net.Addr {
 }
 
 var defaultGetServerConfig = func(certificate *tls.Certificate, negotiatedProtocol string) *tls.Config {
-	return &tls.Config{
-		Certificates: []tls.Certificate{*certificate},
-		NextProtos:   []string{negotiatedProtocol},
+	config := &tls.Config{
+		// if negotiatedProtocol is empty, the handshake will success only if the client does not send ALPN.
+		NextProtos: []string{negotiatedProtocol},
 	}
+
+	if certificate != nil {
+		config.Certificates = []tls.Certificate{*certificate}
+	}
+	return config
 }
 
 // NewTLSListener returns a new net.Listener that listens for incoming TLS connections on l.
@@ -235,7 +240,7 @@ func (c *tlsConn) handshakeWithServer(dstAddr net.Addr, msg *clientHelloMsg, ser
 		}
 		if protocol == "" {
 			// the server does not support any of alpnProtocols
-			return si.certificate, "", fmt.Errorf("%w: %v(%v)", alertNoApplicationProtocol, serverName, dstAddr)
+			return si.certificate, "", fmt.Errorf("no application protocol (serverName=%s, addr=%s)", serverName, dstAddr)
 		}
 		// we still need to negotiate the protocol
 	} else {
