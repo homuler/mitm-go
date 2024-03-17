@@ -264,11 +264,6 @@ func (c *tlsConn) handshakeWithServer(dstAddr net.Addr, msg *clientHelloMsg, ser
 	return si.certificate, state.NegotiatedProtocol, nil
 }
 
-const (
-	recordHeaderLen     = 5
-	recordTypeHandshake = 22
-)
-
 var (
 	errUnexpectedRecordType = errors.New("unexpected record type")
 	errInvalidClientHello   = errors.New("invalid ClientHello")
@@ -280,7 +275,7 @@ func peekClientHello(r *memorizingReader, msg *clientHelloMsg) error {
 		return err
 	}
 
-	typ := uint8(hdr[0])
+	typ := recordType(hdr[0])
 	ver := uint16(hdr[1])<<8 | uint16(hdr[2])
 
 	if typ != recordTypeHandshake || ver > 0x1000 {

@@ -35,52 +35,6 @@ import (
 	"golang.org/x/crypto/cryptobyte"
 )
 
-// TLS 1.3 Key Share. See RFC 8446, Section 4.2.8.
-type keyShare struct {
-	group tls.CurveID
-	data  []byte
-}
-
-// TLS 1.3 PSK Identity. Can be a Session Ticket, or a reference to a saved
-// session. See RFC 8446, Section 4.2.11.
-type pskIdentity struct {
-	label               []byte
-	obfuscatedTicketAge uint32
-}
-
-// TLS extension numbers
-const (
-	extensionServerName              uint16 = 0
-	extensionStatusRequest           uint16 = 5
-	extensionSupportedCurves         uint16 = 10 // supported_groups in TLS 1.3, see RFC 8446, Section 4.2.7
-	extensionSupportedPoints         uint16 = 11
-	extensionSignatureAlgorithms     uint16 = 13
-	extensionALPN                    uint16 = 16
-	extensionSCT                     uint16 = 18
-	extensionExtendedMasterSecret    uint16 = 23
-	extensionSessionTicket           uint16 = 35
-	extensionPreSharedKey            uint16 = 41
-	extensionEarlyData               uint16 = 42
-	extensionSupportedVersions       uint16 = 43
-	extensionCookie                  uint16 = 44
-	extensionPSKModes                uint16 = 45
-	extensionCertificateAuthorities  uint16 = 47
-	extensionSignatureAlgorithmsCert uint16 = 50
-	extensionKeyShare                uint16 = 51
-	extensionQUICTransportParameters uint16 = 57
-	extensionRenegotiationInfo       uint16 = 0xff01
-)
-
-// TLS signaling cipher suite values
-const (
-	scsvRenegotiation uint16 = 0x00ff
-)
-
-// TLS CertificateStatusType (RFC 3546)
-const (
-	statusTypeOCSP uint8 = 1
-)
-
 type clientHelloMsg struct {
 	raw                              []byte
 	vers                             uint16
