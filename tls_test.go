@@ -485,3 +485,69 @@ func TestNewTLSListner_can_serve_different_protocols(t *testing.T) {
 		})
 	}
 }
+
+func TestNewTLSListner_can_handle_invalid_client(t *testing.T) {
+	t.Parallel()
+
+	if rootCACert == nil {
+		t.Fatal("rootCACert is not initialized")
+	}
+
+	rootCAs := x509.NewCertPool()
+	rootCAs.AddCert(rootCACert.Leaf)
+
+	clientRootCAs := x509.NewCertPool()
+	clientRootCAs.AddCert(mitmCACert.Leaf)
+
+	// start a true server
+	tlsServer, err := newTLSEchoServer("example.com")
+	require.NoError(t, err, "failed to create a TLS echo server")
+
+	// serverCert, err := issueCertificate(pkix.Name{CommonName: "example.com"}, []string{tlsServer.addr()})
+	require.NoError(t, err, "failed to issue the server certificate")
+
+	err = tlsServer.start(nil)
+	//&tls.Config{
+	// Certificates: []tls.Certificate{*serverCert},
+	//})
+	require.NoError(t, err, "failed to start a TLS echo server")
+	defer tlsServer.close()
+
+	// start an MITM server
+	l, err := net.ListenTCP("tcp", &net.TCPAddr{})
+	require.NoError(t, err, "failed to create an MITM server")
+
+	tl, err := mitm.NewTLSListener(l, &mitm.TLSConfig{
+		RootCertificate: mitmCACert,
+		GetClientConfig: func(serverName string, alpnProtocols []string) *tls.Config {
+			return &tls.Config{ServerName: serverName, RootCAs: rootCAs}
+		},
+	})
+	require.NoError(t, err, "failed to create an MITM listener")
+	defer tl.Close()
+
+	go func() {
+		// only serve the first connection
+		conn, err := tl.Accept()
+		if !assert.NoError(t, err, "unexpected listener error") {
+			return
+		}
+		defer conn.Close()
+
+		_, err = io.Copy(io.Discard, conn)
+		assertTLSError(t, err, "tls: first record does not look like a TLS handshake")
+		conn.Close()
+	}()
+
+	mitmAddr := tl.Addr()
+
+	clientConn, err := net.Dial(mitmAddr.Network(), mitmAddr.String())
+	require.NoError(t, err, "failed to dial the MITM server")
+	defer clientConn.Close()
+
+	_, err = clientConn.Write([]byte("hello, world\n"))
+	assert.NoError(t, err, "failed to write to the MITM server")
+
+	_, err = io.ReadAll(clientConn)
+	assert.ErrorContains(t, err, "read: connection reset by peer")
+}
