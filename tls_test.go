@@ -57,7 +57,10 @@ func (s *tlsEchoServer) start(config *tls.Config) error {
 			}
 
 			go func() {
-				io.Copy(conn, conn)
+				_, err := io.Copy(conn, conn)
+				if err != nil {
+					s.err = errors.Join(s.err, err)
+				}
 			}()
 		}
 
@@ -78,6 +81,16 @@ func issueCertificate(subject pkix.Name, dnsNames []string) (*tls.Certificate, e
 		return nil, err
 	}
 	return &cert, nil
+}
+
+func assertTLSError(t *testing.T, err error, expected string) bool {
+	t.Helper()
+
+	if expected == "" {
+		return assert.NoError(t, err)
+	} else {
+		return assert.ErrorContains(t, err, expected)
+	}
 }
 
 func TestNewTLSListener_fails_if_the_root_certificate_is_missing(t *testing.T) {
@@ -117,7 +130,8 @@ func TestNewTLSListner_dials_remote_server(t *testing.T) {
 		name               string
 		mitmListenerConfig *mitm.TLSConfig
 		getServerConfig    func(*testing.T, *tlsEchoServer) *tls.Config
-		err                error
+		mitmErr            string
+		clientErr          string
 	}{
 		{
 			name: "server certificate is not valid for any names",
@@ -128,7 +142,8 @@ func TestNewTLSListner_dials_remote_server(t *testing.T) {
 				},
 			},
 			getServerConfig: getInvalidServerConfig,
-			err:             mitm.ErrHandshakeWithServer,
+			mitmErr:         "tls: no certificates configured",
+			clientErr:       "remote error: tls:",
 		},
 		{
 			name: "server certificate is not valid but the validation is skipped",
@@ -139,7 +154,8 @@ func TestNewTLSListner_dials_remote_server(t *testing.T) {
 				},
 			},
 			getServerConfig: getInvalidServerConfig,
-			err:             nil,
+			mitmErr:         "remote error: tls: bad certificate",
+			clientErr:       "tls: failed to verify certificate",
 		},
 		{
 			name: "server certificate is signed by unknown authority",
@@ -147,7 +163,8 @@ func TestNewTLSListner_dials_remote_server(t *testing.T) {
 				RootCertificate: mitmCACert,
 			},
 			getServerConfig: getValidServerConfig,
-			err:             mitm.ErrHandshakeWithServer,
+			mitmErr:         "tls: no certificates configured",
+			clientErr:       "remote error: tls:",
 		},
 		{
 			name: "server certificate is valid",
@@ -158,7 +175,6 @@ func TestNewTLSListner_dials_remote_server(t *testing.T) {
 				},
 			},
 			getServerConfig: getValidServerConfig,
-			err:             nil,
 		},
 	}
 
@@ -183,18 +199,21 @@ func TestNewTLSListner_dials_remote_server(t *testing.T) {
 
 			tl, err := mitm.NewTLSListener(l, c.mitmListenerConfig)
 			require.NoError(t, err, "failed to create an MITM listener")
+			defer tl.Close()
+
+			done := make(chan struct{})
 
 			go func() {
 				// only serve the first connection
 				conn, err := tl.Accept()
-				defer tl.Close()
-
-				assert.ErrorIs(t, err, c.err, "unexpected MITM error")
-
-				if err == nil {
-					io.Copy(io.Discard, conn)
-					conn.Close()
+				if !assert.NoErrorf(t, err, "unexpected listener error") {
+					return
 				}
+				defer conn.Close()
+
+				_, err = io.Copy(io.Discard, conn)
+				assertTLSError(t, err, c.mitmErr)
+				close(done)
 			}()
 
 			// a client dials the MITM server
@@ -204,12 +223,11 @@ func TestNewTLSListner_dials_remote_server(t *testing.T) {
 				ServerName: tlsServer.addr(),
 				RootCAs:    clientRootCAs,
 			})
-
-			// when err != nil, it's caused by the server and is already checked in the goroutine, so we ignore it here.
-			if err == nil {
+			assertTLSError(t, err, c.clientErr)
+			if clientConn != nil {
 				clientConn.Close()
 			}
-			// NOTE: handshake is already done, so we don't need to wait the goroutine to finish
+			<-done
 		})
 	}
 }
@@ -233,7 +251,8 @@ func TestNewTLSListner_supports_ALPN(t *testing.T) {
 		mitmNextProtos   []string
 		clientNextProtos []string
 		expectedProto    string
-		err              error
+		mitmErr          string
+		clientErr        string
 	}{
 		{
 			name:           "server & client does not support ALPN",
@@ -245,7 +264,8 @@ func TestNewTLSListner_supports_ALPN(t *testing.T) {
 			serverNextProtos: []string{"c"},
 			clientNextProtos: []string{"a", "b"},
 			expectedProto:    "",
-			err:              mitm.ErrHandshakeWithServer,
+			mitmErr:          "tls: client requested unsupported application protocols",
+			clientErr:        "remote error: tls: no application protocol",
 		},
 		{
 			name:             "server accepts the 2nd",
@@ -305,18 +325,22 @@ func TestNewTLSListner_supports_ALPN(t *testing.T) {
 				},
 			})
 			require.NoError(t, err, "failed to create an MITM listener")
+			defer tl.Close()
+
+			done := make(chan struct{})
 
 			go func() {
 				// only serve the first connection
 				conn, err := tl.Accept()
-				defer tl.Close()
-
-				assert.ErrorIsf(t, err, c.err, "unexpected MITM error")
-
-				if err == nil {
-					io.Copy(io.Discard, conn)
-					conn.Close()
+				if !assert.NoError(t, err, "unexpected listener error") {
+					return
 				}
+				defer conn.Close()
+
+				_, err = io.Copy(io.Discard, conn)
+				assertTLSError(t, err, c.mitmErr)
+
+				close(done)
 			}()
 
 			// a client dials the MITM server
@@ -327,13 +351,15 @@ func TestNewTLSListner_supports_ALPN(t *testing.T) {
 				RootCAs:    clientRootCAs,
 				NextProtos: c.clientNextProtos,
 			})
-			if err != nil {
-				assert.NotNilf(t, c.err, "unexpected client error: %v", err)
-				return
+			assertTLSError(t, err, c.clientErr)
+			if clientConn == nil {
+				assert.Emptyf(t, c.expectedProto, "expected proto %s, but client connection is nil", c.expectedProto)
+			} else {
+				assert.Equalf(t, c.expectedProto, clientConn.ConnectionState().NegotiatedProtocol, "unexpected negotiated protocol")
+				clientConn.Close()
 			}
-			defer clientConn.Close()
 
-			assert.Equalf(t, c.expectedProto, clientConn.ConnectionState().NegotiatedProtocol, "unexpected negotiated protocol")
+			<-done
 		})
 	}
 }
@@ -376,9 +402,11 @@ func TestNewTLSListner_can_serve_different_protocols(t *testing.T) {
 		},
 	})
 	require.NoError(t, err, "failed to create an MITM listener")
+	defer tl.Close()
+
+	errs := make(chan error)
 
 	go func() {
-		// only serve the first connection
 		for {
 			conn, err := tl.Accept()
 			if err != nil {
@@ -386,7 +414,10 @@ func TestNewTLSListner_can_serve_different_protocols(t *testing.T) {
 			}
 			defer conn.Close()
 
-			go io.Copy(io.Discard, conn)
+			go func() {
+				_, err := io.Copy(io.Discard, conn)
+				errs <- err
+			}()
 		}
 	}()
 
@@ -397,6 +428,8 @@ func TestNewTLSListner_can_serve_different_protocols(t *testing.T) {
 		name          string
 		nextProtos    []string
 		expectedProto string
+		mitmErr       string
+		clientErr     string
 	}{
 		{
 			name:          "client does not support ALPN",
@@ -412,6 +445,22 @@ func TestNewTLSListner_can_serve_different_protocols(t *testing.T) {
 			nextProtos:    []string{"c", "b"},
 			expectedProto: "b",
 		},
+		{
+			name:          "MITM server knows the server supports the 1st protocol",
+			nextProtos:    []string{"a", "c"},
+			expectedProto: "a",
+		},
+		{
+			name:          "MITM server knows the server supports the 2nd protocol",
+			nextProtos:    []string{"c", "a"},
+			expectedProto: "a",
+		},
+		{
+			name:       "MITM server knows the server doesn't support all the requested protocols",
+			nextProtos: []string{"c"},
+			mitmErr:    "tls: client requested unsupported application protocols",
+			clientErr:  "remote error: tls: no application protocol",
+		},
 	}
 
 	for _, c := range cases {
@@ -423,10 +472,16 @@ func TestNewTLSListner_can_serve_different_protocols(t *testing.T) {
 				RootCAs:    clientRootCAs,
 				NextProtos: c.nextProtos,
 			})
-			require.NoError(t, err, "failed to dial the MITM server")
-			defer clientConn.Close()
+			assertTLSError(t, err, c.clientErr)
+			if clientConn == nil {
+				assert.Emptyf(t, c.expectedProto, "expected proto %s, but client connection is nil", c.expectedProto)
+			} else {
+				assert.Equalf(t, c.expectedProto, clientConn.ConnectionState().NegotiatedProtocol, "unexpected negotiated protocol")
+				clientConn.Close()
+			}
 
-			assert.Equalf(t, c.expectedProto, clientConn.ConnectionState().NegotiatedProtocol, "unexpected negotiated protocol")
+			err = <-errs
+			assertTLSError(t, err, c.mitmErr)
 		})
 	}
 }
