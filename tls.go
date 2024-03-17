@@ -213,9 +213,13 @@ func (c *tlsConn) handshakeWithServer(dstAddr net.Addr, msg *clientHelloMsg, ser
 	si, ok := serverInfoCache[serverName]
 	if ok {
 		protocol, ok := si.protocols.getFirst(alpnProtocols)
-		if ok || protocol == "" {
+		if ok || (protocol == "" && len(alpnProtocols) == 0) {
 			// skip handshake & negotiation
 			return si.certificate, protocol, nil
+		}
+		if protocol == "" {
+			// the server does not support any of alpnProtocols
+			return si.certificate, "", fmt.Errorf("%w: %v(%v)", alertNoApplicationProtocol, serverName, dstAddr)
 		}
 		// we still need to negotiate the protocol
 	} else {
