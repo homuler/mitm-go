@@ -713,3 +713,10 @@ func TestNewTLSListner_can_handle_invalid_client(t *testing.T) {
 
 	<-done
 }
+
+func TestNewTLSServer_fails_if_the_root_certificate_is_missing(t *testing.T) {
+	t.Parallel()
+
+	_, err := mitm.NewTLSServer(nil, &mitm.TLSConfig{})
+	assert.ErrorIs(t, err, mitm.ErrInvalidTLSConfig)
+}
