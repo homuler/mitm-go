@@ -1,6 +1,7 @@
 package mitm_test
 
 import (
+	"bytes"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -497,6 +498,83 @@ func TestNewTLSListner_can_serve_different_protocols(t *testing.T) {
 	}
 }
 
+func TestNewTLSListner_can_serve_if_client_does_not_support_SNI(t *testing.T) {
+	t.Parallel()
+
+	if rootCACert == nil {
+		t.Fatal("rootCACert is not initialized")
+	}
+
+	rootCAs := x509.NewCertPool()
+	rootCAs.AddCert(rootCACert.Leaf)
+
+	clientRootCAs := x509.NewCertPool()
+	clientRootCAs.AddCert(mitmCACert.Leaf)
+
+	// start a true server
+	tlsServer, err := newTLSEchoServer("example.com")
+	require.NoError(t, err, "failed to create a TLS echo server")
+
+	serverCert, err := issueCertificate(pkix.Name{CommonName: "example.com"}, tlsServer.addr())
+	require.NoError(t, err, "failed to issue the server certificate")
+
+	err = tlsServer.start(&tls.Config{
+		Certificates: []tls.Certificate{*serverCert},
+	})
+	require.NoError(t, err, "failed to start a TLS echo server")
+	defer tlsServer.close()
+
+	// start an MITM server
+	l, err := net.ListenTCP("tcp", &net.TCPAddr{})
+	require.NoError(t, err, "failed to create an MITM server")
+
+	tl, err := mitm.NewTLSListener(l, &mitm.TLSConfig{
+		RootCertificate: mitmCACert,
+		GetDestination: func(conn net.Conn, serverName string) net.Addr {
+			return tlsServer.addr()
+		},
+		GetClientConfig: func(serverName string, alpnProtocols []string) *tls.Config {
+			return &tls.Config{RootCAs: rootCAs}
+		},
+	})
+	require.NoError(t, err, "failed to create an MITM listener")
+	defer tl.Close()
+
+	done := make(chan struct{})
+	buf := bytes.NewBuffer(nil)
+
+	go func() {
+		// only serve the first connection
+		conn, err := tl.Accept()
+		if !assert.NoError(t, err, "unexpected listener error") {
+			return
+		}
+		defer conn.Close()
+
+		_, err = io.Copy(buf, conn)
+		assert.NoError(t, err)
+
+		close(done)
+	}()
+
+	mitmAddr := tl.Addr()
+
+	clientConn, err := tls.Dial(mitmAddr.Network(), mitmAddr.String(), &tls.Config{
+		RootCAs: clientRootCAs,
+	})
+	require.NoError(t, err, "failed to dial the MITM server")
+
+	msg := "hello, world\n"
+	_, err = clientConn.Write([]byte(msg))
+	require.NoError(t, err, "failed to send a message to the MITM server")
+
+	clientConn.Close()
+
+	<-done
+
+	assert.Equal(t, msg, buf.String(), "MITM server received an unexpected message")
+}
+
 func TestNewTLSListner_can_handle_invalid_client(t *testing.T) {
 	t.Parallel()
 
@@ -536,6 +614,8 @@ func TestNewTLSListner_can_handle_invalid_client(t *testing.T) {
 	require.NoError(t, err, "failed to create an MITM listener")
 	defer tl.Close()
 
+	done := make(chan struct{})
+
 	go func() {
 		// only serve the first connection
 		conn, err := tl.Accept()
@@ -546,6 +626,8 @@ func TestNewTLSListner_can_handle_invalid_client(t *testing.T) {
 
 		_, err = io.Copy(io.Discard, conn)
 		assertTLSError(t, err, "tls: first record does not look like a TLS handshake")
+
+		close(done)
 	}()
 
 	mitmAddr := tl.Addr()
@@ -559,4 +641,6 @@ func TestNewTLSListner_can_handle_invalid_client(t *testing.T) {
 
 	_, err = io.ReadAll(clientConn)
 	assert.ErrorContains(t, err, "read: connection reset by peer")
+
+	<-done
 }
