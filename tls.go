@@ -114,7 +114,7 @@ var defaultBufferPool = sync.Pool{
 }
 
 var defaultGetDestination = func(conn net.Conn, serverName string) net.Addr {
-	return &addr{network: conn.LocalAddr().Network(), str: serverName}
+	return NewAddr(conn.LocalAddr().Network(), serverName)
 }
 
 var defaultGetServerConfig = func(certificate *tls.Certificate, negotiatedProtocol *string) *tls.Config {

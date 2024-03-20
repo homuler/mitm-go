@@ -111,7 +111,7 @@ func (h *proxyHandler) serveInnerConn(conn net.Conn, destination *url.URL) error
 		}))
 
 	config := h.tlsConfig.Clone()
-	config.GetDestination = func(net.Conn, string) net.Addr { return &urlAddr{destination} }
+	config.GetDestination = func(net.Conn, string) net.Addr { return NewURLAddr(conn.LocalAddr().Network(), destination) }
 
 	tlsConn, err := mitm.NewTLSServer(tc, config)
 	if err != nil {

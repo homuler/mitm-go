@@ -3,22 +3,14 @@ package http
 import (
 	"net"
 	"net/url"
+
+	"github.com/homuler/mitm-proxy-go"
 )
 
 type ProxyConn interface {
 	LocalAddr() net.Addr
 }
 
-type urlAddr struct {
-	*url.URL
-}
-
-var _ net.Addr = (*urlAddr)(nil)
-
-func (a *urlAddr) Network() string {
-	return a.Network()
-}
-
-func (a *urlAddr) String() string {
-	return a.Host
+func NewURLAddr(network string, u *url.URL) net.Addr {
+	return mitm.NewAddr(network, u.Host)
 }

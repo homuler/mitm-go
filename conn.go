@@ -15,15 +15,19 @@ func init() {
 	close(closedchan)
 }
 
-type addr struct {
+type Addr struct {
 	network string
 	str     string
 }
 
-var _ net.Addr = (*addr)(nil)
+var _ net.Addr = (*Addr)(nil)
 
-func (a *addr) Network() string { return a.network }
-func (a *addr) String() string  { return a.str }
+func NewAddr(network, str string) *Addr {
+	return &Addr{network: network, str: str}
+}
+
+func (a *Addr) Network() string { return a.network }
+func (a *Addr) String() string  { return a.str }
 
 // TamperedConn is a [net.Conn] that can be tampered.
 // Every [net.Conn] method can be replaced with a custom implementation.
