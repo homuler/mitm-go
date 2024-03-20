@@ -23,7 +23,7 @@ type tlsEchoServer struct {
 	err error
 }
 
-func newTLSEchoServer(cn string) (*tlsEchoServer, error) {
+func newTLSEchoServer() (*tlsEchoServer, error) {
 	l, err := net.ListenTCP("tcp", &net.TCPAddr{})
 	if err != nil {
 		return nil, err
@@ -93,6 +93,23 @@ func issueCertificate(subject pkix.Name, addr net.Addr) (*tls.Certificate, error
 		return nil, err
 	}
 	return &cert, nil
+}
+
+func setupServer(t *testing.T, mitmConfig *mitm.TLSConfig) (*tlsEchoServer, net.Listener) {
+	t.Helper()
+
+	// start a true server
+	tlsServer, err := newTLSEchoServer()
+	require.NoError(t, err, "failed to create a TLS echo server")
+
+	// start an MITM server
+	l, err := net.ListenTCP("tcp", &net.TCPAddr{})
+	require.NoError(t, err, "failed to create an MITM server")
+
+	tl, err := mitm.NewTLSListener(l, mitmConfig)
+	require.NoError(t, err, "failed to create an MITM listener")
+
+	return tlsServer, tl
 }
 
 func assertTLSError(t *testing.T, err error, expected string) bool {
@@ -207,23 +224,16 @@ func TestNewTLSListner_dials_remote_server(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 
-			// start a true server
-			tlsServer, err := newTLSEchoServer("example.com")
-			require.NoError(t, err, "failed to create a TLS echo server")
-
-			serverConfig := c.getServerConfig(t, tlsServer)
-			err = tlsServer.start(serverConfig)
-			require.NoError(t, err, "failed to start a TLS echo server")
+			tlsServer, tl := setupServer(t, c.mitmListenerConfig)
 			defer tlsServer.close()
-
-			// start an MITM server
-			l, err := net.ListenTCP("tcp", &net.TCPAddr{})
-			require.NoError(t, err, "failed to create an MITM server")
-
-			tl, err := mitm.NewTLSListener(l, c.mitmListenerConfig)
-			require.NoError(t, err, "failed to create an MITM listener")
 			defer tl.Close()
 
+			// start a true server
+			serverConfig := c.getServerConfig(t, tlsServer)
+			err := tlsServer.start(serverConfig)
+			require.NoError(t, err, "failed to start a TLS echo server")
+
+			// start an MITM server
 			done := make(chan struct{})
 
 			go func() {
@@ -323,10 +333,17 @@ func TestNewTLSListner_supports_ALPN(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 
-			// start a true server
-			tlsServer, err := newTLSEchoServer("example.com")
-			require.NoError(t, err, "failed to create a TLS echo server")
+			tlsServer, tl := setupServer(t, &mitm.TLSConfig{
+				RootCertificate: mitmCACert,
+				NextProtos:      c.mitmNextProtos,
+				GetClientConfig: func(serverName string, alpnProtocols []string) *tls.Config {
+					return &tls.Config{ServerName: serverName, RootCAs: rootCAs, NextProtos: alpnProtocols}
+				},
+			})
+			defer tlsServer.close()
+			defer tl.Close()
 
+			// start a true server
 			serverCert, err := issueCertificate(pkix.Name{CommonName: "example.com"}, tlsServer.addr())
 			require.NoError(t, err, "failed to issue the server certificate")
 
@@ -335,22 +352,8 @@ func TestNewTLSListner_supports_ALPN(t *testing.T) {
 				NextProtos:   c.serverNextProtos,
 			})
 			require.NoError(t, err, "failed to start a TLS echo server")
-			defer tlsServer.close()
 
 			// start an MITM server
-			l, err := net.ListenTCP("tcp", &net.TCPAddr{})
-			require.NoError(t, err, "failed to create an MITM server")
-
-			tl, err := mitm.NewTLSListener(l, &mitm.TLSConfig{
-				RootCertificate: mitmCACert,
-				NextProtos:      c.mitmNextProtos,
-				GetClientConfig: func(serverName string, alpnProtocols []string) *tls.Config {
-					return &tls.Config{ServerName: serverName, RootCAs: rootCAs, NextProtos: alpnProtocols}
-				},
-			})
-			require.NoError(t, err, "failed to create an MITM listener")
-			defer tl.Close()
-
 			done := make(chan struct{})
 
 			go func() {
@@ -401,10 +404,16 @@ func TestNewTLSListner_can_serve_different_protocols(t *testing.T) {
 	clientRootCAs := x509.NewCertPool()
 	clientRootCAs.AddCert(mitmCACert.Leaf)
 
-	// start a true server
-	tlsServer, err := newTLSEchoServer("example.com")
-	require.NoError(t, err, "failed to create a TLS echo server")
+	tlsServer, tl := setupServer(t, &mitm.TLSConfig{
+		RootCertificate: mitmCACert,
+		GetClientConfig: func(serverName string, alpnProtocols []string) *tls.Config {
+			return &tls.Config{ServerName: serverName, RootCAs: rootCAs, NextProtos: alpnProtocols}
+		},
+	})
+	defer tlsServer.close()
+	defer tl.Close()
 
+	// start a true server
 	serverCert, err := issueCertificate(pkix.Name{CommonName: "example.com"}, tlsServer.addr())
 	require.NoError(t, err, "failed to issue the server certificate")
 
@@ -413,21 +422,8 @@ func TestNewTLSListner_can_serve_different_protocols(t *testing.T) {
 		NextProtos:   []string{"a", "b"},
 	})
 	require.NoError(t, err, "failed to start a TLS echo server")
-	defer tlsServer.close()
 
 	// start an MITM server
-	l, err := net.ListenTCP("tcp", &net.TCPAddr{})
-	require.NoError(t, err, "failed to create an MITM server")
-
-	tl, err := mitm.NewTLSListener(l, &mitm.TLSConfig{
-		RootCertificate: mitmCACert,
-		GetClientConfig: func(serverName string, alpnProtocols []string) *tls.Config {
-			return &tls.Config{ServerName: serverName, RootCAs: rootCAs, NextProtos: alpnProtocols}
-		},
-	})
-	require.NoError(t, err, "failed to create an MITM listener")
-	defer tl.Close()
-
 	errs := make(chan error)
 
 	go func() {
@@ -523,10 +519,16 @@ func TestNewTLSListner_can_read_messages_from_client(t *testing.T) {
 	clientRootCAs := x509.NewCertPool()
 	clientRootCAs.AddCert(mitmCACert.Leaf)
 
-	// start a true server
-	tlsServer, err := newTLSEchoServer("example.com")
-	require.NoError(t, err, "failed to create a TLS echo server")
+	tlsServer, tl := setupServer(t, &mitm.TLSConfig{
+		RootCertificate: mitmCACert,
+		GetClientConfig: func(serverName string, alpnProtocols []string) *tls.Config {
+			return &tls.Config{RootCAs: rootCAs}
+		},
+	})
+	defer tlsServer.close()
+	defer tl.Close()
 
+	// start a true server
 	serverCert, err := issueCertificate(pkix.Name{CommonName: "example.com"}, tlsServer.addr())
 	require.NoError(t, err, "failed to issue the server certificate")
 
@@ -534,21 +536,8 @@ func TestNewTLSListner_can_read_messages_from_client(t *testing.T) {
 		Certificates: []tls.Certificate{*serverCert},
 	})
 	require.NoError(t, err, "failed to start a TLS echo server")
-	defer tlsServer.close()
 
 	// start an MITM server
-	l, err := net.ListenTCP("tcp", &net.TCPAddr{})
-	require.NoError(t, err, "failed to create an MITM server")
-
-	tl, err := mitm.NewTLSListener(l, &mitm.TLSConfig{
-		RootCertificate: mitmCACert,
-		GetClientConfig: func(serverName string, alpnProtocols []string) *tls.Config {
-			return &tls.Config{RootCAs: rootCAs}
-		},
-	})
-	require.NoError(t, err, "failed to create an MITM listener")
-	defer tl.Close()
-
 	done := make(chan struct{})
 	buf := bytes.NewBuffer(nil)
 
@@ -599,7 +588,7 @@ func TestNewTLSListner_can_serve_if_client_does_not_support_SNI(t *testing.T) {
 	clientRootCAs.AddCert(mitmCACert.Leaf)
 
 	// start a true server
-	tlsServer, err := newTLSEchoServer("example.com")
+	tlsServer, err := newTLSEchoServer()
 	require.NoError(t, err, "failed to create a TLS echo server")
 
 	serverCert, err := issueCertificate(pkix.Name{CommonName: "example.com"}, tlsServer.addr())
@@ -675,10 +664,16 @@ func TestNewTLSListner_can_handle_invalid_client(t *testing.T) {
 	clientRootCAs := x509.NewCertPool()
 	clientRootCAs.AddCert(mitmCACert.Leaf)
 
-	// start a true server
-	tlsServer, err := newTLSEchoServer("example.com")
-	require.NoError(t, err, "failed to create a TLS echo server")
+	tlsServer, tl := setupServer(t, &mitm.TLSConfig{
+		RootCertificate: mitmCACert,
+		GetClientConfig: func(serverName string, alpnProtocols []string) *tls.Config {
+			return &tls.Config{ServerName: serverName, RootCAs: rootCAs}
+		},
+	})
+	defer tlsServer.close()
+	defer tl.Close()
 
+	// start a true server
 	serverCert, err := issueCertificate(pkix.Name{CommonName: "example.com"}, tlsServer.addr())
 	require.NoError(t, err, "failed to issue the server certificate")
 
@@ -686,21 +681,8 @@ func TestNewTLSListner_can_handle_invalid_client(t *testing.T) {
 		Certificates: []tls.Certificate{*serverCert},
 	})
 	require.NoError(t, err, "failed to start a TLS echo server")
-	defer tlsServer.close()
 
 	// start an MITM server
-	l, err := net.ListenTCP("tcp", &net.TCPAddr{})
-	require.NoError(t, err, "failed to create an MITM server")
-
-	tl, err := mitm.NewTLSListener(l, &mitm.TLSConfig{
-		RootCertificate: mitmCACert,
-		GetClientConfig: func(serverName string, alpnProtocols []string) *tls.Config {
-			return &tls.Config{ServerName: serverName, RootCAs: rootCAs}
-		},
-	})
-	require.NoError(t, err, "failed to create an MITM listener")
-	defer tl.Close()
-
 	done := make(chan struct{})
 
 	go func() {
