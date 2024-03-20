@@ -135,13 +135,14 @@ func TestNewTLSListner_dials_remote_server(t *testing.T) {
 		serverCert, err := issueCertificate(pkix.Name{CommonName: "example.com"}, s.addr())
 		require.NoError(t, err, "failed to issue the server certificate")
 
-		return &tls.Config{Certificates: []tls.Certificate{*serverCert}}
+		return &tls.Config{Certificates: []tls.Certificate{*serverCert}, NextProtos: []string{"a", "b"}}
 	}
 
 	cases := []struct {
 		name               string
 		mitmListenerConfig *mitm.TLSConfig
 		getServerConfig    func(*testing.T, *tlsEchoServer) *tls.Config
+		nextProtos         []string
 		mitmErr            string
 		clientErr          string
 	}{
@@ -155,7 +156,7 @@ func TestNewTLSListner_dials_remote_server(t *testing.T) {
 			},
 			getServerConfig: getInvalidServerConfig,
 			mitmErr:         "tls: no certificates configured",
-			clientErr:       "remote error: tls:",
+			clientErr:       "remote error: tls: unrecognized name",
 		},
 		{
 			name: "server certificate is not valid but the validation is skipped",
@@ -176,7 +177,17 @@ func TestNewTLSListner_dials_remote_server(t *testing.T) {
 			},
 			getServerConfig: getValidServerConfig,
 			mitmErr:         "tls: no certificates configured",
-			clientErr:       "remote error: tls:",
+			clientErr:       "remote error: tls: unrecognized name",
+		},
+		{
+			name: "server certificate is invalid and client supports ALPN",
+			mitmListenerConfig: &mitm.TLSConfig{
+				RootCertificate: mitmCACert,
+			},
+			getServerConfig: getValidServerConfig,
+			nextProtos:      []string{"a"},
+			mitmErr:         "tls: no certificates configured",
+			clientErr:       "remote error: tls: unrecognized name",
 		},
 		{
 			name: "server certificate is valid",
@@ -234,6 +245,7 @@ func TestNewTLSListner_dials_remote_server(t *testing.T) {
 			clientConn, err := tls.Dial(mitmAddr.Network(), mitmAddr.String(), &tls.Config{
 				ServerName: tlsServer.addr().String(),
 				RootCAs:    clientRootCAs,
+				NextProtos: c.nextProtos,
 			})
 			assertTLSError(t, err, c.clientErr)
 			if clientConn != nil {

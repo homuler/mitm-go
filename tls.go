@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"slices"
+	"strings"
 	"sync"
 )
 
@@ -46,7 +47,7 @@ type TLSConfig struct {
 	NextProtos []string
 
 	// GetServerConfig optionally specifies a function that returns a tls.Config that is used to handle incoming connections.
-	GetServerConfig func(certificate *tls.Certificate, negotiatedProtocol string) *tls.Config
+	GetServerConfig func(certificate *tls.Certificate, negotiatedProtocol *string) *tls.Config
 
 	// GetClientConfig optionally specifies a function that returns a tls.Config that is used to dial the actual server.
 	GetClientConfig func(serverName string, alpnProtocols []string) *tls.Config
@@ -108,15 +109,17 @@ var defaultGetDestination = func(conn net.Conn, serverName string) net.Addr {
 	return &addr{network: conn.LocalAddr().Network(), str: serverName}
 }
 
-var defaultGetServerConfig = func(certificate *tls.Certificate, negotiatedProtocol string) *tls.Config {
-	config := &tls.Config{
-		// if negotiatedProtocol is empty, the handshake will success only if the client does not send ALPN.
-		NextProtos: []string{negotiatedProtocol},
-	}
+var defaultGetServerConfig = func(certificate *tls.Certificate, negotiatedProtocol *string) *tls.Config {
+	config := &tls.Config{}
 
 	if certificate != nil {
 		config.Certificates = []tls.Certificate{*certificate}
 	}
+	if negotiatedProtocol != nil {
+		// if negotiatedProtocol is empty, the handshake will succeed only if the client does not support ALPN.
+		config.NextProtos = []string{*negotiatedProtocol}
+	}
+
 	return config
 }
 
@@ -159,9 +162,12 @@ func (tl *tlsListener) Close() error   { return tl.listener.Close() }
 func (tl *tlsListener) Addr() net.Addr { return tl.listener.Addr() }
 
 var (
-	ErrPeekClientHello     = errors.New("failed to peek client hello")
-	errHandshakeWithServer = errors.New("failed to handshake with the true server")
-	errForgeCertificate    = errors.New("failed to forge a certificate")
+	ErrPeekClientHello       = errors.New("failed to peek client hello")
+	errBadServerCertificate  = errors.New("failed to verify the certificate of the true server")
+	errConnectToServer       = errors.New("failed to connect to the true server")
+	errForgeCertificate      = errors.New("failed to forge a certificate")
+	errHandshakeWithServer   = errors.New("failed to handshake with the true server")
+	errNoApplicationProtocol = errors.New("no application protocol")
 )
 
 type tlsConn struct {
@@ -215,7 +221,14 @@ func newTLSServer(conn net.Conn, config *TLSConfig, serverInfoCache ServerInfoCa
 		TamperConnClose(closeTLSConn))
 
 	cert, protocol, err := tlsConn.handshakeWithServer(dstAddr, clientHello, serverInfoCache)
-	serverConfig := tlsConn.config.GetServerConfig(cert, protocol)
+
+	var serverConfig *tls.Config
+	if err != nil && !errors.Is(err, errNoApplicationProtocol) {
+		serverConfig = tlsConn.config.GetServerConfig(cert, nil)
+	} else {
+		serverConfig = tlsConn.config.GetServerConfig(cert, &protocol)
+	}
+
 	// let tls.Server to handle the error
 	return tls.Server(proxyConn, serverConfig), err
 }
@@ -250,16 +263,39 @@ func (c *tlsConn) handshakeWithServer(dstAddr net.Addr, msg *clientHelloMsg, ser
 		}
 		if protocol == "" {
 			// the server does not support any of alpnProtocols
-			return si.certificate, "", fmt.Errorf("no application protocol (serverName=%s, addr=%s)", serverName, dstAddr)
+			return si.certificate, "", fmt.Errorf("%w (serverName=%s, addr=%s)", errNoApplicationProtocol, serverName, dstAddr)
 		}
 		// we still need to negotiate the protocol
 	} else {
 		si = serverInfo{protocols: make(supportedProtocolMap)}
 	}
 
-	clientConfig := c.config.GetClientConfig(serverName, alpnProtocols)
-	tc, err := tls.Dial(dstAddr.Network(), dstAddr.String(), clientConfig)
+	dstAddrStr := dstAddr.String()
+	rawConn, err := net.Dial(dstAddr.Network(), dstAddrStr)
 	if err != nil {
+		return nil, "", fmt.Errorf("%w (serverName=%v, addr=%v): %w", errConnectToServer, serverName, dstAddr, err)
+	}
+	defer rawConn.Close()
+
+	clientConfig := c.config.GetClientConfig(serverName, alpnProtocols)
+	if clientConfig.ServerName == "" && !clientConfig.InsecureSkipVerify {
+		// set ServerName to avoid "tls: either ServerName or InsecureSkipVerify must be specified in the tls.Config"
+		colonPos := strings.LastIndex(dstAddrStr, ":")
+		if colonPos == -1 {
+			colonPos = len(dstAddrStr)
+		}
+		clientConfig.ServerName = dstAddrStr[:colonPos]
+	}
+
+	tc := tls.Client(rawConn, clientConfig)
+	if err := tc.Handshake(); err != nil {
+		if _, ok := err.(*tls.CertificateVerificationError); ok {
+			return nil, "", fmt.Errorf("%w (serverName=%v, addr=%v): %w", errBadServerCertificate, serverName, dstAddr, err)
+		}
+		// handshake failed due to other reasons than certificate verification (e.g. ALPN)
+		if strings.Contains(err.Error(), "no application protocol") {
+			return nil, "", fmt.Errorf("%w (serverName=%v, addr=%v): %w", errNoApplicationProtocol, serverName, dstAddr, err)
+		}
 		return si.certificate, "", fmt.Errorf("%w (serverName=%v, addr=%v): %w", errHandshakeWithServer, serverName, dstAddr, err)
 	}
 	state := tc.ConnectionState()
