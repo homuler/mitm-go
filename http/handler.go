@@ -25,8 +25,6 @@ type proxyHandler struct {
 	handler   http.Handler
 	tlsConfig *mitm.TLSConfig
 	innerSrv  *http.Server
-
-	serverInfoCache mitm.ServerInfoCache
 }
 
 var _ http.Handler = (*proxyHandler)(nil)
@@ -115,7 +113,7 @@ func (h *proxyHandler) serveInnerConn(conn net.Conn, destination *url.URL) error
 	config := h.tlsConfig.Clone()
 	config.GetDestination = func(net.Conn, string) net.Addr { return &urlAddr{destination} }
 
-	tlsConn, err := mitm.NewTLSServer(tc, config, h.serverInfoCache)
+	tlsConn, err := mitm.NewTLSServer(tc, config)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrProxyInternal, err)
 	}
@@ -134,8 +132,13 @@ func (h *proxyHandler) serveInnerConn(conn net.Conn, destination *url.URL) error
 }
 
 func Proxify(handler http.Handler, tlsConfig *mitm.TLSConfig) *proxyHandler {
+	config := tlsConfig.Clone()
+	if config.ServerInfoCache == nil {
+		config.ServerInfoCache = make(mitm.ServerInfoCache)
+	}
+
 	return &proxyHandler{
-		tlsConfig: tlsConfig,
+		tlsConfig: config,
 		innerSrv: &http.Server{
 			Handler: TProxify(handler),
 			ConnContext: func(ctx context.Context, c net.Conn) context.Context {
@@ -150,7 +153,6 @@ func Proxify(handler http.Handler, tlsConfig *mitm.TLSConfig) *proxyHandler {
 				return WithDestination(ctx, pc.Destination())
 			},
 		},
-		serverInfoCache: make(mitm.ServerInfoCache),
 	}
 }
 

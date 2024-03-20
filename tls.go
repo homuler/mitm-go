@@ -47,10 +47,16 @@ type TLSConfig struct {
 	NextProtos []string
 
 	// GetServerConfig optionally specifies a function that returns a tls.Config that is used to handle incoming connections.
+	// That is, the returned tls.Config is used when the server is acting as a TLS server.
 	GetServerConfig func(certificate *tls.Certificate, negotiatedProtocol *string) *tls.Config
 
 	// GetClientConfig optionally specifies a function that returns a tls.Config that is used to dial the actual server.
+	// That is, the returned tls.Config is used when the server is acting as a TLS client.
 	GetClientConfig func(serverName string, alpnProtocols []string) *tls.Config
+
+	// ServerInfoCache optionally specifies a cache that stores the information of the actual servers.
+	// If not set, a new cache is created.
+	ServerInfoCache ServerInfoCache
 }
 
 var (
@@ -64,6 +70,7 @@ func (c *TLSConfig) Clone() *TLSConfig {
 		NextProtos:      c.NextProtos,
 		GetServerConfig: c.GetServerConfig,
 		GetClientConfig: c.GetClientConfig,
+		ServerInfoCache: c.ServerInfoCache,
 	}
 }
 
@@ -79,6 +86,9 @@ func (c *TLSConfig) Normalize() *TLSConfig {
 	if c.GetClientConfig == nil {
 		c.GetClientConfig = defaultGetClientConfig
 	}
+	if c.ServerInfoCache == nil {
+		c.ServerInfoCache = make(ServerInfoCache)
+	}
 	return c
 }
 
@@ -92,8 +102,6 @@ func (c *TLSConfig) validate() error {
 type tlsListener struct {
 	listener net.Listener
 	config   *TLSConfig
-
-	serverInfoCache ServerInfoCache
 }
 
 var _ net.Listener = (*tlsListener)(nil)
@@ -139,8 +147,6 @@ func NewTLSListener(l net.Listener, config *TLSConfig) (net.Listener, error) {
 	return &tlsListener{
 		listener: l,
 		config:   config.Normalize(),
-
-		serverInfoCache: make(ServerInfoCache),
 	}, nil
 }
 
@@ -150,7 +156,7 @@ func (tl *tlsListener) Accept() (net.Conn, error) {
 		return nil, err
 	}
 
-	tlsConn, _ := newTLSServer(conn, tl.config, tl.serverInfoCache)
+	tlsConn, _ := newTLSServer(conn, tl.config)
 	// TODO: log the error
 	return tlsConn, nil
 }
@@ -174,17 +180,17 @@ type tlsConn struct {
 	config *TLSConfig
 }
 
-func NewTLSServer(conn net.Conn, config *TLSConfig, serverInfoCache ServerInfoCache) (*tls.Conn, error) {
+func NewTLSServer(conn net.Conn, config *TLSConfig) (*tls.Conn, error) {
 	if err := config.validate(); err != nil {
 		return nil, err
 	}
 
-	return newTLSServer(conn, config.Normalize(), serverInfoCache)
+	return newTLSServer(conn, config.Normalize())
 }
 
 // newTLSServer returns a TLS server connection and the error that occurred while forging a certificate if any.
 // tls.Conn is always returned even if an error occurred.
-func newTLSServer(conn net.Conn, config *TLSConfig, serverInfoCache ServerInfoCache) (*tls.Conn, error) {
+func newTLSServer(conn net.Conn, config *TLSConfig) (*tls.Conn, error) {
 	bufPtr := defaultBufferPool.Get().(*[]byte)
 	tlsConn := newTlsConn(conn, config, (*bufPtr)[0:0])
 	closeTLSConn := func() (err error) {
@@ -217,7 +223,7 @@ func newTLSServer(conn net.Conn, config *TLSConfig, serverInfoCache ServerInfoCa
 		TamperConnRead(tlsConn.reader.OneTimeReader().Read),
 		TamperConnClose(closeTLSConn))
 
-	cert, protocol, err := tlsConn.handshakeWithServer(dstAddr, clientHello, serverInfoCache)
+	cert, protocol, err := tlsConn.handshakeWithServer(dstAddr, clientHello)
 
 	var serverConfig *tls.Config
 	if err != nil && !errors.Is(err, errNoApplicationProtocol) {
@@ -241,7 +247,7 @@ func newTlsConn(conn net.Conn, config *TLSConfig, buffer []byte) *tlsConn {
 // handshakeWithServer returns a certificate of the server and the negotiated protocol.
 // serverInfoCache will be updated with the result.
 // Note that even if the error in the return value is not nil, other return values may not be zero values.
-func (c *tlsConn) handshakeWithServer(dstAddr net.Addr, msg *clientHelloMsg, serverInfoCache ServerInfoCache) (*tls.Certificate, string, error) {
+func (c *tlsConn) handshakeWithServer(dstAddr net.Addr, msg *clientHelloMsg) (*tls.Certificate, string, error) {
 	serverName := msg.serverName
 	alpnProtocols := msg.alpnProtocols
 	if len(c.config.NextProtos) > 0 {
@@ -251,13 +257,14 @@ func (c *tlsConn) handshakeWithServer(dstAddr net.Addr, msg *clientHelloMsg, ser
 		})
 	}
 
+	serverInfoCache := c.config.ServerInfoCache
 	dstAddrStr := dstAddr.String()
 	key := serverName
 	if key == "" {
 		key = dstAddrStr
 	}
 
-	si, ok := serverInfoCache[key]
+	si, ok := c.config.ServerInfoCache[key]
 	if ok {
 		protocol, ok := si.protocols.getFirst(alpnProtocols)
 		if ok || (protocol == "" && len(alpnProtocols) == 0) {
