@@ -75,6 +75,9 @@ func (c *TLSConfig) Normalize() *TLSConfig {
 	if c.GetServerConfig == nil {
 		c.GetServerConfig = defaultGetServerConfig
 	}
+	if c.GetClientConfig == nil {
+		c.GetClientConfig = defaultGetClientConfig
+	}
 	return c
 }
 
@@ -115,6 +118,13 @@ var defaultGetServerConfig = func(certificate *tls.Certificate, negotiatedProtoc
 		config.Certificates = []tls.Certificate{*certificate}
 	}
 	return config
+}
+
+var defaultGetClientConfig = func(serverName string, alpnProtocols []string) *tls.Config {
+	return &tls.Config{
+		ServerName: serverName,
+		NextProtos: alpnProtocols,
+	}
 }
 
 // NewTLSListener returns a new net.Listener that listens for incoming TLS connections on l.
@@ -247,16 +257,7 @@ func (c *tlsConn) handshakeWithServer(dstAddr net.Addr, msg *clientHelloMsg, ser
 		si = serverInfo{protocols: make(supportedProtocolMap)}
 	}
 
-	var clientConfig *tls.Config
-	if c.config.GetClientConfig != nil {
-		clientConfig = c.config.GetClientConfig(serverName, alpnProtocols)
-	} else {
-		clientConfig = &tls.Config{
-			ServerName: serverName,
-			NextProtos: alpnProtocols,
-		}
-	}
-
+	clientConfig := c.config.GetClientConfig(serverName, alpnProtocols)
 	tc, err := tls.Dial(dstAddr.Network(), dstAddr.String(), clientConfig)
 	if err != nil {
 		return si.certificate, "", fmt.Errorf("%w (serverName=%v, addr=%v): %w", errHandshakeWithServer, serverName, dstAddr, err)
