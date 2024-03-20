@@ -160,7 +160,6 @@ func (tl *tlsListener) Close() error   { return tl.listener.Close() }
 func (tl *tlsListener) Addr() net.Addr { return tl.listener.Addr() }
 
 var (
-	ErrPeekClientHello       = errors.New("failed to peek client hello")
 	errBadServerCertificate  = errors.New("failed to verify the certificate of the true server")
 	errConnectToServer       = errors.New("failed to connect to the true server")
 	errForgeCertificate      = errors.New("failed to forge a certificate")

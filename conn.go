@@ -8,13 +8,6 @@ import (
 	"time"
 )
 
-// closedchan is a reusable closed channel.
-var closedchan = make(chan struct{})
-
-func init() {
-	close(closedchan)
-}
-
 type Addr struct {
 	network string
 	str     string
