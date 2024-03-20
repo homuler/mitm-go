@@ -290,6 +290,9 @@ func (psrv TProxyServer) ServeTLS(l net.Listener) error {
 	tl, err := mitm.NewTLSListener(l, &mitm.TLSConfig{
 		RootCertificate: &psrv.rootCert,
 		NextProtos:      psrv.nextProtos,
+		GetDestination: func(conn net.Conn, serverName string) net.Addr {
+			return conn.LocalAddr()
+		},
 	})
 	if err != nil {
 		return err
