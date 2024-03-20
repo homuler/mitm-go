@@ -38,8 +38,7 @@ type TLSConfig struct {
 	// RootCertificate is the root certificate to be used to forge certificates.
 	RootCertificate *tls.Certificate
 
-	// GetDestination optionally specifies a function that returns the destination address of the connection.
-	// If not set, the destination address is determined by SNI.
+	// GetDestination specifies a function that returns the destination address of the connection.
 	GetDestination func(conn net.Conn, serverName string) net.Addr
 
 	// NextProtos is a list of supported ALPN protocols.
@@ -77,9 +76,6 @@ func (c *TLSConfig) Clone() *TLSConfig {
 func (c *TLSConfig) Normalize() *TLSConfig {
 	c = c.Clone()
 
-	if c.GetDestination == nil {
-		c.GetDestination = defaultGetDestination
-	}
 	if c.GetServerConfig == nil {
 		c.GetServerConfig = defaultGetServerConfig
 	}
@@ -96,6 +92,9 @@ func (c *TLSConfig) validate() error {
 	if c.RootCertificate == nil {
 		return fmt.Errorf("%w: RootCertificate is required", ErrInvalidTLSConfig)
 	}
+	if c.GetDestination == nil {
+		return fmt.Errorf("%w: GetDestination is required", ErrInvalidTLSConfig)
+	}
 	return nil
 }
 
@@ -111,10 +110,6 @@ var defaultBufferPool = sync.Pool{
 		buf := make([]byte, 0)
 		return &buf
 	},
-}
-
-var defaultGetDestination = func(conn net.Conn, serverName string) net.Addr {
-	return NewAddr(conn.LocalAddr().Network(), serverName)
 }
 
 var defaultGetServerConfig = func(certificate *tls.Certificate, negotiatedProtocol *string) *tls.Config {
