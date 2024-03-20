@@ -60,7 +60,7 @@ type TLSConfig struct {
 }
 
 var (
-	ErrMissingRootCertificate = errors.New("TLSConfig: RootCertificate is required")
+	ErrInvalidTLSConfig = errors.New("invalid mitm.TLSConfig")
 )
 
 func (c *TLSConfig) Clone() *TLSConfig {
@@ -94,7 +94,7 @@ func (c *TLSConfig) Normalize() *TLSConfig {
 
 func (c *TLSConfig) validate() error {
 	if c.RootCertificate == nil {
-		return ErrMissingRootCertificate
+		return fmt.Errorf("%w: RootCertificate is required", ErrInvalidTLSConfig)
 	}
 	return nil
 }

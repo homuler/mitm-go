@@ -126,7 +126,7 @@ func TestNewTLSListener_fails_if_the_root_certificate_is_missing(t *testing.T) {
 	t.Parallel()
 
 	_, err := mitm.NewTLSListener(nil, &mitm.TLSConfig{})
-	assert.ErrorIs(t, err, mitm.ErrMissingRootCertificate)
+	assert.ErrorIs(t, err, mitm.ErrInvalidTLSConfig)
 }
 
 func TestNewTLSListner_dials_remote_server(t *testing.T) {
