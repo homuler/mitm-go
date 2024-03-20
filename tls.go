@@ -150,11 +150,8 @@ func (tl *tlsListener) Accept() (net.Conn, error) {
 		return nil, err
 	}
 
-	tlsConn, err := newTLSServer(conn, tl.config, tl.serverInfoCache)
-	if err != nil {
-		// TODO: log the error
-		fmt.Printf("MITM %v\n", err)
-	}
+	tlsConn, _ := newTLSServer(conn, tl.config, tl.serverInfoCache)
+	// TODO: log the error
 	return tlsConn, nil
 }
 
