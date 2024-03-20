@@ -254,7 +254,13 @@ func (c *tlsConn) handshakeWithServer(dstAddr net.Addr, msg *clientHelloMsg, ser
 		})
 	}
 
-	si, ok := serverInfoCache[serverName]
+	dstAddrStr := dstAddr.String()
+	key := serverName
+	if key == "" {
+		key = dstAddrStr
+	}
+
+	si, ok := serverInfoCache[key]
 	if ok {
 		protocol, ok := si.protocols.getFirst(alpnProtocols)
 		if ok || (protocol == "" && len(alpnProtocols) == 0) {
@@ -270,7 +276,6 @@ func (c *tlsConn) handshakeWithServer(dstAddr net.Addr, msg *clientHelloMsg, ser
 		si = serverInfo{protocols: make(supportedProtocolMap)}
 	}
 
-	dstAddrStr := dstAddr.String()
 	rawConn, err := net.Dial(dstAddr.Network(), dstAddrStr)
 	if err != nil {
 		return nil, "", fmt.Errorf("%w (serverName=%v, addr=%v): %w", errConnectToServer, serverName, dstAddr, err)
@@ -317,7 +322,7 @@ func (c *tlsConn) handshakeWithServer(dstAddr net.Addr, msg *clientHelloMsg, ser
 		si.protocols[p] = false
 	}
 	si.protocols[negotiatedProtocol] = true
-	serverInfoCache[serverName] = si
+	serverInfoCache[key] = si
 
 	return si.certificate, negotiatedProtocol, nil
 }
