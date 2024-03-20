@@ -30,8 +30,8 @@ func newTLSEchoServer(cn string) (*tlsEchoServer, error) {
 	return &tlsEchoServer{l: l}, nil
 }
 
-func (s *tlsEchoServer) addr() string {
-	return s.l.Addr().String()
+func (s *tlsEchoServer) addr() net.Addr {
+	return s.l.Addr()
 }
 
 func (s *tlsEchoServer) close() error {
@@ -70,12 +70,23 @@ func (s *tlsEchoServer) start(config *tls.Config) error {
 	return nil
 }
 
-func issueCertificate(subject pkix.Name, dnsNames []string) (*tls.Certificate, error) {
+func issueCertificate(subject pkix.Name, addr net.Addr) (*tls.Certificate, error) {
+	var ipAddrs []net.IP
+	{
+		host, _, err := net.SplitHostPort(addr.String())
+		if err != nil {
+			// ipAddrs is nil
+		} else {
+			ipAddrs = append(ipAddrs, net.ParseIP(host))
+		}
+	}
+
 	cert, err := mitm.ForgeCertificate(rootCACert, &x509.Certificate{
-		Subject:   subject,
-		NotBefore: time.Now(),
-		NotAfter:  time.Now().Add(1 * time.Hour),
-		DNSNames:  dnsNames,
+		Subject:     subject,
+		NotBefore:   time.Now(),
+		NotAfter:    time.Now().Add(1 * time.Hour),
+		DNSNames:    []string{subject.CommonName, addr.String()},
+		IPAddresses: ipAddrs,
 	})
 	if err != nil {
 		return nil, err
@@ -114,13 +125,13 @@ func TestNewTLSListner_dials_remote_server(t *testing.T) {
 	clientRootCAs.AddCert(mitmCACert.Leaf)
 
 	getInvalidServerConfig := func(t *testing.T, _ *tlsEchoServer) *tls.Config {
-		serverCert, err := issueCertificate(pkix.Name{CommonName: "example.com"}, nil)
+		serverCert, err := issueCertificate(pkix.Name{CommonName: "example.com"}, &net.IPAddr{})
 		require.NoError(t, err, "failed to issue the server certificate")
 
 		return &tls.Config{Certificates: []tls.Certificate{*serverCert}}
 	}
 	getValidServerConfig := func(t *testing.T, s *tlsEchoServer) *tls.Config {
-		serverCert, err := issueCertificate(pkix.Name{CommonName: "example.com"}, []string{s.addr()})
+		serverCert, err := issueCertificate(pkix.Name{CommonName: "example.com"}, s.addr())
 		require.NoError(t, err, "failed to issue the server certificate")
 
 		return &tls.Config{Certificates: []tls.Certificate{*serverCert}}
@@ -220,7 +231,7 @@ func TestNewTLSListner_dials_remote_server(t *testing.T) {
 			mitmAddr := tl.Addr()
 
 			clientConn, err := tls.Dial(mitmAddr.Network(), mitmAddr.String(), &tls.Config{
-				ServerName: tlsServer.addr(),
+				ServerName: tlsServer.addr().String(),
 				RootCAs:    clientRootCAs,
 			})
 			assertTLSError(t, err, c.clientErr)
@@ -303,7 +314,7 @@ func TestNewTLSListner_supports_ALPN(t *testing.T) {
 			tlsServer, err := newTLSEchoServer("example.com")
 			require.NoError(t, err, "failed to create a TLS echo server")
 
-			serverCert, err := issueCertificate(pkix.Name{CommonName: "example.com"}, []string{tlsServer.addr()})
+			serverCert, err := issueCertificate(pkix.Name{CommonName: "example.com"}, tlsServer.addr())
 			require.NoError(t, err, "failed to issue the server certificate")
 
 			err = tlsServer.start(&tls.Config{
@@ -347,7 +358,7 @@ func TestNewTLSListner_supports_ALPN(t *testing.T) {
 			mitmAddr := tl.Addr()
 
 			clientConn, err := tls.Dial(mitmAddr.Network(), mitmAddr.String(), &tls.Config{
-				ServerName: tlsServer.addr(),
+				ServerName: tlsServer.addr().String(),
 				RootCAs:    clientRootCAs,
 				NextProtos: c.clientNextProtos,
 			})
@@ -381,7 +392,7 @@ func TestNewTLSListner_can_serve_different_protocols(t *testing.T) {
 	tlsServer, err := newTLSEchoServer("example.com")
 	require.NoError(t, err, "failed to create a TLS echo server")
 
-	serverCert, err := issueCertificate(pkix.Name{CommonName: "example.com"}, []string{tlsServer.addr()})
+	serverCert, err := issueCertificate(pkix.Name{CommonName: "example.com"}, tlsServer.addr())
 	require.NoError(t, err, "failed to issue the server certificate")
 
 	err = tlsServer.start(&tls.Config{
@@ -468,7 +479,7 @@ func TestNewTLSListner_can_serve_different_protocols(t *testing.T) {
 
 		t.Run(c.name, func(t *testing.T) {
 			clientConn, err := tls.Dial(mitmAddr.Network(), mitmAddr.String(), &tls.Config{
-				ServerName: tlsServer.addr(),
+				ServerName: tlsServer.addr().String(),
 				RootCAs:    clientRootCAs,
 				NextProtos: c.nextProtos,
 			})
@@ -503,13 +514,12 @@ func TestNewTLSListner_can_handle_invalid_client(t *testing.T) {
 	tlsServer, err := newTLSEchoServer("example.com")
 	require.NoError(t, err, "failed to create a TLS echo server")
 
-	// serverCert, err := issueCertificate(pkix.Name{CommonName: "example.com"}, []string{tlsServer.addr()})
+	serverCert, err := issueCertificate(pkix.Name{CommonName: "example.com"}, tlsServer.addr())
 	require.NoError(t, err, "failed to issue the server certificate")
 
-	err = tlsServer.start(nil)
-	//&tls.Config{
-	// Certificates: []tls.Certificate{*serverCert},
-	//})
+	err = tlsServer.start(&tls.Config{
+		Certificates: []tls.Certificate{*serverCert},
+	})
 	require.NoError(t, err, "failed to start a TLS echo server")
 	defer tlsServer.close()
 
@@ -536,7 +546,6 @@ func TestNewTLSListner_can_handle_invalid_client(t *testing.T) {
 
 		_, err = io.Copy(io.Discard, conn)
 		assertTLSError(t, err, "tls: first record does not look like a TLS handshake")
-		conn.Close()
 	}()
 
 	mitmAddr := tl.Addr()

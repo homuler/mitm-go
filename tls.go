@@ -38,7 +38,7 @@ type TLSConfig struct {
 	RootCertificate *tls.Certificate
 
 	// GetDestination optionally specifies a function that returns the destination address of the connection.
-	// If not set, the destination address is determined by the ClientHello message.
+	// If not set, the destination address is determined by SNI.
 	GetDestination func(conn net.Conn, serverName string) net.Addr
 
 	// NextProtos is a list of supported ALPN protocols.
