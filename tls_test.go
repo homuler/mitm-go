@@ -35,6 +35,15 @@ func (s *tlsEchoServer) addr() net.Addr {
 	return s.l.Addr()
 }
 
+func (s *tlsEchoServer) serverName() string {
+	addr := s.addr().String()
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		panic(err)
+	}
+	return host
+}
+
 func (s *tlsEchoServer) close() error {
 	if s.tl != nil {
 		return s.tl.Close()
@@ -86,7 +95,7 @@ func issueCertificate(subject pkix.Name, addr net.Addr) (*tls.Certificate, error
 		Subject:     subject,
 		NotBefore:   time.Now(),
 		NotAfter:    time.Now().Add(1 * time.Hour),
-		DNSNames:    []string{subject.CommonName, addr.String()},
+		DNSNames:    []string{subject.CommonName},
 		IPAddresses: ipAddrs,
 	})
 	if err != nil {
@@ -106,6 +115,9 @@ func setupServer(t *testing.T, mitmConfig *mitm.TLSConfig) (*tlsEchoServer, net.
 	l, err := net.ListenTCP("tcp", &net.TCPAddr{})
 	require.NoError(t, err, "failed to create an MITM server")
 
+	mitmConfig.GetDestination = func(conn net.Conn, serverName string) net.Addr {
+		return tlsServer.addr()
+	}
 	tl, err := mitm.NewTLSListener(l, mitmConfig)
 	require.NoError(t, err, "failed to create an MITM listener")
 
@@ -253,7 +265,7 @@ func TestNewTLSListner_dials_remote_server(t *testing.T) {
 			mitmAddr := tl.Addr()
 
 			clientConn, err := tls.Dial(mitmAddr.Network(), mitmAddr.String(), &tls.Config{
-				ServerName: tlsServer.addr().String(),
+				ServerName: tlsServer.serverName(),
 				RootCAs:    clientRootCAs,
 				NextProtos: c.nextProtos,
 			})
@@ -374,7 +386,7 @@ func TestNewTLSListner_supports_ALPN(t *testing.T) {
 			mitmAddr := tl.Addr()
 
 			clientConn, err := tls.Dial(mitmAddr.Network(), mitmAddr.String(), &tls.Config{
-				ServerName: tlsServer.addr().String(),
+				ServerName: tlsServer.serverName(),
 				RootCAs:    clientRootCAs,
 				NextProtos: c.clientNextProtos,
 			})
@@ -488,7 +500,7 @@ func TestNewTLSListner_can_serve_different_protocols(t *testing.T) {
 
 		t.Run(c.name, func(t *testing.T) {
 			clientConn, err := tls.Dial(mitmAddr.Network(), mitmAddr.String(), &tls.Config{
-				ServerName: tlsServer.addr().String(),
+				ServerName: tlsServer.serverName(),
 				RootCAs:    clientRootCAs,
 				NextProtos: c.nextProtos,
 			})
@@ -558,7 +570,7 @@ func TestNewTLSListner_can_read_messages_from_client(t *testing.T) {
 	mitmAddr := tl.Addr()
 
 	clientConn, err := tls.Dial(mitmAddr.Network(), mitmAddr.String(), &tls.Config{
-		ServerName: tlsServer.addr().String(),
+		ServerName: tlsServer.serverName(),
 		RootCAs:    clientRootCAs,
 	})
 	require.NoError(t, err, "failed to dial the MITM server")
