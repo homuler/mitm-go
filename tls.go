@@ -7,7 +7,6 @@ import (
 	"io"
 	"net"
 	"slices"
-	"strings"
 	"sync"
 )
 
@@ -47,7 +46,7 @@ type TLSConfig struct {
 
 	// GetServerConfig optionally specifies a function that returns a tls.Config that is used to handle incoming connections.
 	// That is, the returned tls.Config is used when the server is acting as a TLS server.
-	GetServerConfig func(certificate *tls.Certificate, negotiatedProtocol *string) *tls.Config
+	GetServerConfig func(certificate *tls.Certificate, negotiatedProtocol string, err error) *tls.Config
 
 	// GetClientConfig optionally specifies a function that returns a tls.Config that is used to dial the actual server.
 	// That is, the returned tls.Config is used when the server is acting as a TLS client.
@@ -112,15 +111,21 @@ var defaultBufferPool = sync.Pool{
 	},
 }
 
-var defaultGetServerConfig = func(certificate *tls.Certificate, negotiatedProtocol *string) *tls.Config {
+var defaultGetServerConfig = func(certificate *tls.Certificate, negotiatedProtocol string, err error) *tls.Config {
 	config := &tls.Config{}
+
+	if err != nil {
+		config.GetCertificate = func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+			return nil, err
+		}
+		return config
+	}
+
+	// if negotiatedProtocol is empty(""), the handshake will succeed only if the client does not support ALPN.
+	config.NextProtos = []string{negotiatedProtocol}
 
 	if certificate != nil {
 		config.Certificates = []tls.Certificate{*certificate}
-	}
-	if negotiatedProtocol != nil {
-		// if negotiatedProtocol is empty, the handshake will succeed only if the client does not support ALPN.
-		config.NextProtos = []string{*negotiatedProtocol}
 	}
 
 	return config
@@ -160,11 +165,8 @@ func (tl *tlsListener) Close() error   { return tl.listener.Close() }
 func (tl *tlsListener) Addr() net.Addr { return tl.listener.Addr() }
 
 var (
-	errBadServerCertificate  = errors.New("failed to verify the certificate of the true server")
-	errConnectToServer       = errors.New("failed to connect to the true server")
-	errForgeCertificate      = errors.New("failed to forge a certificate")
-	errHandshakeWithServer   = errors.New("failed to handshake with the true server")
-	errNoApplicationProtocol = errors.New("no application protocol")
+	ErrHandshakeWithServer   = errors.New("mitm: upstream certificate sniffing failed")
+	ErrNoApplicationProtocol = errors.New("mitm: no application protocol")
 )
 
 type tlsConn struct {
@@ -205,7 +207,8 @@ func newTLSServer(conn net.Conn, config *TLSConfig) (*tls.Conn, error) {
 		}
 	}
 	if err != nil {
-		// let tls.Server to handle the error
+		// let tls.Server to handle the error.
+		// The same error should occur because the same message will be read.
 		c := NewTamperedConn(tlsConn.conn,
 			TamperConnRead(tlsConn.reader.OneTimeReader().Read),
 			TamperConnClose(closeTLSConn))
@@ -219,14 +222,7 @@ func newTLSServer(conn net.Conn, config *TLSConfig) (*tls.Conn, error) {
 
 	cert, protocol, err := tlsConn.handshakeWithServer(dstAddr, clientHello)
 
-	var serverConfig *tls.Config
-	if err != nil && !errors.Is(err, errNoApplicationProtocol) {
-		serverConfig = tlsConn.config.GetServerConfig(cert, nil)
-	} else {
-		serverConfig = tlsConn.config.GetServerConfig(cert, &protocol)
-	}
-
-	// let tls.Server to handle the error
+	serverConfig := tlsConn.config.GetServerConfig(cert, protocol, err)
 	return tls.Server(proxyConn, serverConfig), err
 }
 
@@ -267,40 +263,20 @@ func (c *tlsConn) handshakeWithServer(dstAddr net.Addr, msg *clientHelloMsg) (*t
 		}
 		if protocol == "" {
 			// the server does not support any of alpnProtocols
-			return si.certificate, "", fmt.Errorf("%w (serverName=%s, addr=%s)", errNoApplicationProtocol, serverName, dstAddr)
+			return si.certificate, "", fmt.Errorf("%w (serverName=%s, addr=%s)", ErrNoApplicationProtocol, serverName, dstAddr)
 		}
 		// we still need to negotiate the protocol
 	} else {
 		si = serverInfo{protocols: make(supportedProtocolMap)}
 	}
 
-	rawConn, err := net.Dial(dstAddr.Network(), dstAddrStr)
-	if err != nil {
-		return nil, "", fmt.Errorf("%w (serverName=%v, addr=%v): %w", errConnectToServer, serverName, dstAddr, err)
-	}
-	defer rawConn.Close()
-
 	clientConfig := c.config.GetClientConfig(serverName, alpnProtocols)
-	if clientConfig.ServerName == "" && !clientConfig.InsecureSkipVerify {
-		// set ServerName to avoid "tls: either ServerName or InsecureSkipVerify must be specified in the tls.Config"
-		colonPos := strings.LastIndex(dstAddrStr, ":")
-		if colonPos == -1 {
-			colonPos = len(dstAddrStr)
-		}
-		clientConfig.ServerName = dstAddrStr[:colonPos]
+	tc, err := tls.Dial(dstAddr.Network(), dstAddrStr, clientConfig)
+	if err != nil {
+		return nil, "", fmt.Errorf("%w (serverName=%v, addr=%v): %w", ErrHandshakeWithServer, serverName, dstAddr, err)
 	}
+	defer tc.Close()
 
-	tc := tls.Client(rawConn, clientConfig)
-	if err := tc.Handshake(); err != nil {
-		if _, ok := err.(*tls.CertificateVerificationError); ok {
-			return nil, "", fmt.Errorf("%w (serverName=%v, addr=%v): %w", errBadServerCertificate, serverName, dstAddr, err)
-		}
-		// handshake failed due to other reasons than certificate verification (e.g. ALPN)
-		if strings.Contains(err.Error(), "no application protocol") {
-			return nil, "", fmt.Errorf("%w (serverName=%v, addr=%v): %w", errNoApplicationProtocol, serverName, dstAddr, err)
-		}
-		return si.certificate, "", fmt.Errorf("%w (serverName=%v, addr=%v): %w", errHandshakeWithServer, serverName, dstAddr, err)
-	}
 	state := tc.ConnectionState()
 	negotiatedProtocol := state.NegotiatedProtocol
 
@@ -308,7 +284,7 @@ func (c *tlsConn) handshakeWithServer(dstAddr net.Addr, msg *clientHelloMsg) (*t
 		certs := state.PeerCertificates
 		cert, err := ForgeCertificate(c.config.RootCertificate, certs[0])
 		if err != nil {
-			return nil, negotiatedProtocol, fmt.Errorf("%s (serverName=%v, addr=%v): %w", errForgeCertificate, serverName, dstAddr, err)
+			return nil, negotiatedProtocol, fmt.Errorf("mitm: failed to forge a certificate (serverName=%v, addr=%v): %w", serverName, dstAddr, err)
 		}
 		si.certificate = &cert
 	}
@@ -324,10 +300,6 @@ func (c *tlsConn) handshakeWithServer(dstAddr net.Addr, msg *clientHelloMsg) (*t
 
 	return si.certificate, negotiatedProtocol, nil
 }
-
-var (
-	errInvalidClientHello = errors.New("invalid ClientHello")
-)
 
 func (c *tlsConn) readClientHello(msg *clientHelloMsg) error {
 	hdr, err := c.reader.Next(recordHeaderLen)
@@ -349,7 +321,7 @@ func (c *tlsConn) readClientHello(msg *clientHelloMsg) error {
 	}
 
 	if !unmarshalClientHello(fragment, msg) {
-		return errInvalidClientHello
+		return errors.New("invalid ClientHello")
 	}
 	return nil
 }

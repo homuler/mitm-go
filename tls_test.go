@@ -184,8 +184,8 @@ func TestNewTLSListner_dials_remote_server(t *testing.T) {
 				},
 			},
 			getServerConfig: getInvalidServerConfig,
-			mitmErr:         "tls: no certificates configured",
-			clientErr:       "remote error: tls: unrecognized name",
+			mitmErr:         mitm.ErrHandshakeWithServer.Error(),
+			clientErr:       "remote error: tls: internal error",
 		},
 		{
 			name: "server certificate is not valid but the validation is skipped",
@@ -205,8 +205,8 @@ func TestNewTLSListner_dials_remote_server(t *testing.T) {
 				RootCertificate: mitmCACert,
 			},
 			getServerConfig: getValidServerConfig,
-			mitmErr:         "tls: no certificates configured",
-			clientErr:       "remote error: tls: unrecognized name",
+			mitmErr:         mitm.ErrHandshakeWithServer.Error(),
+			clientErr:       "remote error: tls: internal error",
 		},
 		{
 			name: "server certificate is invalid and client supports ALPN",
@@ -215,8 +215,8 @@ func TestNewTLSListner_dials_remote_server(t *testing.T) {
 			},
 			getServerConfig: getValidServerConfig,
 			nextProtos:      []string{"a"},
-			mitmErr:         "tls: no certificates configured",
-			clientErr:       "remote error: tls: unrecognized name",
+			mitmErr:         mitm.ErrHandshakeWithServer.Error(),
+			clientErr:       "remote error: tls: internal error",
 		},
 		{
 			name: "server certificate is valid",
@@ -310,8 +310,8 @@ func TestNewTLSListner_supports_ALPN(t *testing.T) {
 			serverNextProtos: []string{"c"},
 			clientNextProtos: []string{"a", "b"},
 			expectedProto:    "",
-			mitmErr:          "tls: client requested unsupported application protocols",
-			clientErr:        "remote error: tls: no application protocol",
+			mitmErr:          mitm.ErrHandshakeWithServer.Error(),
+			clientErr:        "remote error: tls: internal error",
 		},
 		{
 			name:             "server accepts the 2nd",
@@ -490,8 +490,8 @@ func TestNewTLSListner_can_serve_different_protocols(t *testing.T) {
 		{
 			name:       "MITM server knows the server doesn't support all the requested protocols",
 			nextProtos: []string{"c"},
-			mitmErr:    "tls: client requested unsupported application protocols",
-			clientErr:  "remote error: tls: no application protocol",
+			mitmErr:    mitm.ErrNoApplicationProtocol.Error(),
+			clientErr:  "remote error: tls: internal error",
 		},
 	}
 
