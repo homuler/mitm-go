@@ -156,9 +156,7 @@ func (tl *tlsListener) Accept() (net.Conn, error) {
 		return nil, err
 	}
 
-	tlsConn, _ := newTLSServer(conn, tl.config)
-	// TODO: log the error
-	return tlsConn, nil
+	return tlsServer(conn, tl.config), nil
 }
 
 func (tl *tlsListener) Close() error   { return tl.listener.Close() }
@@ -181,12 +179,12 @@ func NewTLSServer(conn net.Conn, config *TLSConfig) (*tls.Conn, error) {
 		return nil, err
 	}
 
-	return newTLSServer(conn, config.Normalize())
+	return tlsServer(conn, config.Normalize()), nil
 }
 
-// newTLSServer returns a TLS server connection and the error that occurred while forging a certificate if any.
+// tlsServer returns a TLS server connection and the error that occurred while forging a certificate if any.
 // tls.Conn is always returned even if an error occurred.
-func newTLSServer(conn net.Conn, config *TLSConfig) (*tls.Conn, error) {
+func tlsServer(conn net.Conn, config *TLSConfig) *tls.Conn {
 	bufPtr := defaultBufferPool.Get().(*[]byte)
 	tlsConn := newTlsConn(conn, config, (*bufPtr)[0:0])
 	closeTLSConn := func() (err error) {
@@ -212,7 +210,7 @@ func newTLSServer(conn net.Conn, config *TLSConfig) (*tls.Conn, error) {
 		c := NewTamperedConn(tlsConn.conn,
 			TamperConnRead(tlsConn.reader.OneTimeReader().Read),
 			TamperConnClose(closeTLSConn))
-		return tls.Server(c, nil), err
+		return tls.Server(c, nil)
 	}
 
 	dstAddr := config.GetDestination(conn, clientHello.serverName)
@@ -223,7 +221,7 @@ func newTLSServer(conn net.Conn, config *TLSConfig) (*tls.Conn, error) {
 	cert, protocol, err := tlsConn.handshakeWithServer(dstAddr, clientHello)
 
 	serverConfig := tlsConn.config.GetServerConfig(cert, protocol, err)
-	return tls.Server(proxyConn, serverConfig), err
+	return tls.Server(proxyConn, serverConfig)
 }
 
 func newTlsConn(conn net.Conn, config *TLSConfig, buffer []byte) *tlsConn {
