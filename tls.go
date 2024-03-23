@@ -72,7 +72,7 @@ func (c *TLSConfig) Clone() *TLSConfig {
 	}
 }
 
-func (c *TLSConfig) Normalize() *TLSConfig {
+func (c *TLSConfig) normalize() *TLSConfig {
 	c = c.Clone()
 
 	if c.GetServerConfig == nil {
@@ -146,7 +146,7 @@ func NewTLSListener(l net.Listener, config *TLSConfig) (net.Listener, error) {
 
 	return &tlsListener{
 		listener: l,
-		config:   config.Normalize(),
+		config:   config.normalize(),
 	}, nil
 }
 
@@ -179,7 +179,7 @@ func NewTLSServer(conn net.Conn, config *TLSConfig) (*tls.Conn, error) {
 		return nil, err
 	}
 
-	return tlsServer(conn, config.Normalize()), nil
+	return tlsServer(conn, config.normalize()), nil
 }
 
 // tlsServer returns a TLS server connection and the error that occurred while forging a certificate if any.
