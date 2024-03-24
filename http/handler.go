@@ -138,6 +138,7 @@ func Proxify(handler http.Handler, tlsConfig *mitm.TLSConfig) *proxyHandler {
 	}
 
 	return &proxyHandler{
+		handler:   handler,
 		tlsConfig: config,
 		innerSrv: &http.Server{
 			Handler: TProxify(handler),
