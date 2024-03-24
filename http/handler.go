@@ -180,18 +180,25 @@ func TProxify(handler http.Handler) *tproxyHandler {
 	return &tproxyHandler{handler: handler}
 }
 
-var RoundTripHandlerFunc http.HandlerFunc = handleRoundTrip
+var RoundTripHandlerFunc http.HandlerFunc = NewRoundTripHandler(newRoundTripper)
 
-func handleRoundTrip(w http.ResponseWriter, r *http.Request) {
-	fmt.Printf("%+v\n", r)
-	rt := NewRoundTripper(r)
+type roundTripperBuilder = func(*http.Request) http.RoundTripper
+
+func NewRoundTripHandler(f roundTripperBuilder) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		rt := f(r)
+		handleRoundTrip(rt, w, r)
+	}
+}
+
+func handleRoundTrip(rt http.RoundTripper, w http.ResponseWriter, r *http.Request) {
 	res, err := rt.RoundTrip(r)
 	if err != nil {
-		panic(fmt.Errorf("failed to request to %v: %w", r.URL, err))
+		// TODO: notify the error to the caller
+		panic(err)
 	}
 	defer res.Body.Close()
 
-	fmt.Printf("%+v\n", res)
 	header := w.Header()
 	for k, v := range res.Header {
 		for _, vv := range v {
@@ -199,13 +206,10 @@ func handleRoundTrip(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.WriteHeader(res.StatusCode)
-	_, err = io.Copy(w, res.Body)
-	if err != nil {
-		panic(err)
-	}
+	io.Copy(w, res.Body) // ignore error
 }
 
-func NewRoundTripper(r *http.Request) http.RoundTripper {
+func newRoundTripper(r *http.Request) http.RoundTripper {
 	if r.TLS == nil {
 		return &http.Transport{
 			DisableKeepAlives: true,

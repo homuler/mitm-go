@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/homuler/mitm-proxy-go"
 	mitmHttp "github.com/homuler/mitm-proxy-go/http"
 	"github.com/homuler/mitm-proxy-go/internal/testutil"
 	"github.com/stretchr/testify/assert"
@@ -81,30 +82,10 @@ func serializeRequest(w io.Writer, r *http.Request) {
 	json.NewEncoder(w).Encode(req)
 }
 
-func TestProxyServer_can_proxy_http1_by_default(t *testing.T) {
-	t.Parallel()
-
-	server := newHTTPServer()
-	server.Start()
-	defer server.Close()
-
-	proxyServer := mitmHttp.NewProxyServer(&mitm.TLSConfig{})
-	defer proxyServer.Close()
-
-	l := testutil.NewTCPListener(t)
-	defer l.Close()
-
-	go func() {
-		proxyServer.Serve(l)
-	}()
-
-	proxyURL, err := url.Parse(fmt.Sprintf("http://%s", l.Addr().String()))
-	require.NoError(t, err)
-
-	client := &http.Client{
-		Transport: &http.Transport{
-			Proxy: http.ProxyURL(proxyURL),
-		},
+func runHTTPTests(t *testing.T, server *httptest.Server, client *http.Client) {
+	scheme := "http"
+	if server.TLS != nil {
+		scheme = "https"
 	}
 
 	cases := []struct {
@@ -165,7 +146,7 @@ func TestProxyServer_can_proxy_http1_by_default(t *testing.T) {
 		c := c
 
 		t.Run(c.name, func(t *testing.T) {
-			url := fmt.Sprintf("http://%s%s?status=%d", server.Listener.Addr().String(), c.path, c.status)
+			url := fmt.Sprintf("%s://%s%s?status=%d", scheme, server.Listener.Addr().String(), c.path, c.status)
 			req, err := http.NewRequest(c.method, url, strings.NewReader(c.body))
 			require.NoErrorf(t, err, "failed to create a request")
 
@@ -192,4 +173,95 @@ func TestProxyServer_can_proxy_http1_by_default(t *testing.T) {
 			assert.Equal(t, c.body, string(body))
 		})
 	}
+}
+
+func TestProxyServer_can_proxy_http1_by_default(t *testing.T) {
+	t.Parallel()
+
+	server := newHTTPServer()
+	server.Start()
+	defer server.Close()
+
+	proxyServer := mitmHttp.NewProxyServer(&mitm.TLSConfig{})
+	defer proxyServer.Close()
+
+	l := testutil.NewTCPListener(t)
+	defer l.Close()
+
+	go func() {
+		proxyServer.Serve(l)
+	}()
+
+	proxyURL, err := url.Parse(fmt.Sprintf("http://%s", l.Addr().String()))
+	require.NoError(t, err)
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyURL(proxyURL),
+		},
+	}
+
+	runHTTPTests(t, server, client)
+}
+
+func TestProxyServer_can_proxy_http1_through_http1_connect(t *testing.T) {
+	t.Parallel()
+
+	mitmCACert := testutil.MITMCACert(t)
+	rootCAs := testutil.RootCAs(t)
+
+	server := newHTTPServer()
+	cert := testutil.MustIssueCertificate(t, pkix.Name{CommonName: "example.com"}, server.Listener.Addr())
+	server.TLS = &tls.Config{
+		Certificates: []tls.Certificate{*cert},
+		NextProtos:   []string{"h2", "http/1.1"},
+	}
+	server.StartTLS()
+	defer server.Close()
+
+	l := testutil.NewTCPListener(t)
+	defer l.Close()
+
+	proxyCert := testutil.MustIssueCertificate(t, pkix.Name{CommonName: "mitm-go.org"}, l.Addr())
+	handler := mitmHttp.NewRoundTripHandler(func(r *http.Request) http.RoundTripper {
+		assert.Equalf(t, r.Proto, "HTTP/1.1", "unexpected protocol version")
+
+		return &http.Transport{
+			TLSClientConfig: &tls.Config{
+				RootCAs: rootCAs,
+			},
+			DisableKeepAlives: true,
+		}
+	})
+	proxyServer := mitmHttp.NewProxyServer(&mitm.TLSConfig{
+		RootCertificate: mitmCACert,
+		GetClientConfig: func(serverName string, alpnProtocols []string) *tls.Config {
+			return &tls.Config{
+				RootCAs:    rootCAs,
+				ServerName: serverName,
+				NextProtos: alpnProtocols,
+			}
+		},
+	}, mitmHttp.TLSConfig(&tls.Config{
+		Certificates: []tls.Certificate{*proxyCert},
+	}), mitmHttp.Handler(handler))
+	defer proxyServer.Close()
+
+	go func() {
+		proxyServer.ServeTLS(l, "", "")
+	}()
+
+	proxyURL, err := url.Parse(fmt.Sprintf("https://%s", l.Addr().String()))
+	require.NoError(t, err)
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyURL(proxyURL),
+			TLSClientConfig: &tls.Config{
+				RootCAs: testutil.ClientRootCAs(t),
+			},
+		},
+	}
+
+	runHTTPTests(t, server, client)
 }
