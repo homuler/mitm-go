@@ -1,7 +1,6 @@
 package mitm_test
 
 import (
-	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"fmt"
@@ -11,38 +10,15 @@ import (
 	"time"
 
 	"github.com/homuler/mitm-proxy-go"
+	"github.com/homuler/mitm-proxy-go/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-var (
-	mitmCACert *tls.Certificate
-	rootCACert *tls.Certificate
-)
-
-func init() {
-	mitmCACert = loadCACert(pkix.Name{CommonName: "mitm-go"}, 1*time.Hour)
-	rootCACert = loadCACert(pkix.Name{CommonName: "root"}, 1*time.Hour)
-}
-
-func loadCACert(subject pkix.Name, duretion time.Duration) *tls.Certificate {
-	cert, err := mitm.CreateCACert(subject, duretion)
-	if err != nil {
-		return nil
-	}
-	cert.Leaf, err = x509.ParseCertificate(cert.Certificate[0])
-	if err != nil {
-		return nil
-	}
-	return &cert
-}
-
 func TestForgeCertificate(t *testing.T) {
 	t.Parallel()
 
-	if mitmCACert == nil {
-		t.Fatal("mitmCACert is not initialized")
-	}
+	mitmCACert := testutil.MITMCACert(t)
 
 	dnsName := "example.com"
 	dummyCert := &x509.Certificate{

@@ -3,15 +3,14 @@ package mitm_test
 import (
 	"bytes"
 	"crypto/tls"
-	"crypto/x509"
 	"crypto/x509/pkix"
 	"errors"
 	"io"
 	"net"
 	"testing"
-	"time"
 
 	"github.com/homuler/mitm-proxy-go"
+	"github.com/homuler/mitm-proxy-go/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -23,18 +22,8 @@ type tlsEchoServer struct {
 	err error
 }
 
-func newTCPListener(t *testing.T) net.Listener {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		if l, err = net.Listen("tcp6", "[::1]:0"); err != nil {
-			t.Fatalf("failed to listen on a port: %v", err)
-		}
-	}
-	return l
-}
-
 func newTLSEchoServer(t *testing.T) *tlsEchoServer {
-	l := newTCPListener(t)
+	l := testutil.NewTCPListener(t)
 	return &tlsEchoServer{l: l}
 }
 
@@ -87,30 +76,6 @@ func (s *tlsEchoServer) start(config *tls.Config) error {
 	return nil
 }
 
-func issueCertificate(subject pkix.Name, addr net.Addr) (*tls.Certificate, error) {
-	var ipAddrs []net.IP
-	{
-		host, _, err := net.SplitHostPort(addr.String())
-		if err != nil {
-			// ipAddrs is nil
-		} else {
-			ipAddrs = append(ipAddrs, net.ParseIP(host))
-		}
-	}
-
-	cert, err := mitm.ForgeCertificate(rootCACert, &x509.Certificate{
-		Subject:     subject,
-		NotBefore:   time.Now(),
-		NotAfter:    time.Now().Add(1 * time.Hour),
-		DNSNames:    []string{subject.CommonName},
-		IPAddresses: ipAddrs,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &cert, nil
-}
-
 func setupServer(t *testing.T, mitmConfig *mitm.TLSConfig) (*tlsEchoServer, net.Listener) {
 	t.Helper()
 
@@ -118,7 +83,7 @@ func setupServer(t *testing.T, mitmConfig *mitm.TLSConfig) (*tlsEchoServer, net.
 	tlsServer := newTLSEchoServer(t)
 
 	// start an MITM server
-	l := newTCPListener(t)
+	l := testutil.NewTCPListener(t)
 	mitmConfig.GetDestination = func(conn net.Conn, serverName string) net.Addr {
 		return tlsServer.addr()
 	}
@@ -148,26 +113,16 @@ func TestNewTLSListener_fails_if_the_root_certificate_is_missing(t *testing.T) {
 func TestNewTLSListner_dials_remote_server(t *testing.T) {
 	t.Parallel()
 
-	if rootCACert == nil {
-		t.Fatal("rootCACert is not initialized")
-	}
-
-	rootCAs := x509.NewCertPool()
-	rootCAs.AddCert(rootCACert.Leaf)
-
-	clientRootCAs := x509.NewCertPool()
-	clientRootCAs.AddCert(mitmCACert.Leaf)
+	mitmCACert := testutil.MITMCACert(t)
+	rootCAs := testutil.RootCAs(t)
+	clientRootCAs := testutil.ClientRootCAs(t)
 
 	getInvalidServerConfig := func(t *testing.T, _ *tlsEchoServer) *tls.Config {
-		serverCert, err := issueCertificate(pkix.Name{CommonName: "example.com"}, &net.IPAddr{})
-		require.NoError(t, err, "failed to issue the server certificate")
-
+		serverCert := testutil.MustIssueCertificate(t, pkix.Name{CommonName: "example.com"}, &net.IPAddr{})
 		return &tls.Config{Certificates: []tls.Certificate{*serverCert}}
 	}
 	getValidServerConfig := func(t *testing.T, s *tlsEchoServer) *tls.Config {
-		serverCert, err := issueCertificate(pkix.Name{CommonName: "example.com"}, s.addr())
-		require.NoError(t, err, "failed to issue the server certificate")
-
+		serverCert := testutil.MustIssueCertificate(t, pkix.Name{CommonName: "example.com"}, s.addr())
 		return &tls.Config{Certificates: []tls.Certificate{*serverCert}, NextProtos: []string{"a", "b"}}
 	}
 
@@ -285,15 +240,9 @@ func TestNewTLSListner_dials_remote_server(t *testing.T) {
 func TestNewTLSListner_supports_ALPN(t *testing.T) {
 	t.Parallel()
 
-	if rootCACert == nil {
-		t.Fatal("rootCACert is not initialized")
-	}
-
-	rootCAs := x509.NewCertPool()
-	rootCAs.AddCert(rootCACert.Leaf)
-
-	clientRootCAs := x509.NewCertPool()
-	clientRootCAs.AddCert(mitmCACert.Leaf)
+	mitmCACert := testutil.MITMCACert(t)
+	rootCAs := testutil.RootCAs(t)
+	clientRootCAs := testutil.ClientRootCAs(t)
 
 	cases := []struct {
 		name             string
@@ -360,10 +309,9 @@ func TestNewTLSListner_supports_ALPN(t *testing.T) {
 			defer tl.Close()
 
 			// start a true server
-			serverCert, err := issueCertificate(pkix.Name{CommonName: "example.com"}, tlsServer.addr())
-			require.NoError(t, err, "failed to issue the server certificate")
+			serverCert := testutil.MustIssueCertificate(t, pkix.Name{CommonName: "example.com"}, tlsServer.addr())
 
-			err = tlsServer.start(&tls.Config{
+			err := tlsServer.start(&tls.Config{
 				Certificates: []tls.Certificate{*serverCert},
 				NextProtos:   c.serverNextProtos,
 			})
@@ -410,15 +358,9 @@ func TestNewTLSListner_supports_ALPN(t *testing.T) {
 func TestNewTLSListner_can_serve_different_protocols(t *testing.T) {
 	t.Parallel()
 
-	if rootCACert == nil {
-		t.Fatal("rootCACert is not initialized")
-	}
-
-	rootCAs := x509.NewCertPool()
-	rootCAs.AddCert(rootCACert.Leaf)
-
-	clientRootCAs := x509.NewCertPool()
-	clientRootCAs.AddCert(mitmCACert.Leaf)
+	mitmCACert := testutil.MITMCACert(t)
+	rootCAs := testutil.RootCAs(t)
+	clientRootCAs := testutil.ClientRootCAs(t)
 
 	tlsServer, tl := setupServer(t, &mitm.TLSConfig{
 		RootCertificate: mitmCACert,
@@ -430,10 +372,9 @@ func TestNewTLSListner_can_serve_different_protocols(t *testing.T) {
 	defer tl.Close()
 
 	// start a true server
-	serverCert, err := issueCertificate(pkix.Name{CommonName: "example.com"}, tlsServer.addr())
-	require.NoError(t, err, "failed to issue the server certificate")
+	serverCert := testutil.MustIssueCertificate(t, pkix.Name{CommonName: "example.com"}, tlsServer.addr())
 
-	err = tlsServer.start(&tls.Config{
+	err := tlsServer.start(&tls.Config{
 		Certificates: []tls.Certificate{*serverCert},
 		NextProtos:   []string{"a", "b"},
 	})
@@ -525,15 +466,9 @@ func TestNewTLSListner_can_serve_different_protocols(t *testing.T) {
 func TestNewTLSListner_can_read_messages_from_client(t *testing.T) {
 	t.Parallel()
 
-	if rootCACert == nil {
-		t.Fatal("rootCACert is not initialized")
-	}
-
-	rootCAs := x509.NewCertPool()
-	rootCAs.AddCert(rootCACert.Leaf)
-
-	clientRootCAs := x509.NewCertPool()
-	clientRootCAs.AddCert(mitmCACert.Leaf)
+	mitmCACert := testutil.MITMCACert(t)
+	rootCAs := testutil.RootCAs(t)
+	clientRootCAs := testutil.ClientRootCAs(t)
 
 	tlsServer, tl := setupServer(t, &mitm.TLSConfig{
 		RootCertificate: mitmCACert,
@@ -545,10 +480,9 @@ func TestNewTLSListner_can_read_messages_from_client(t *testing.T) {
 	defer tl.Close()
 
 	// start a true server
-	serverCert, err := issueCertificate(pkix.Name{CommonName: "example.com"}, tlsServer.addr())
-	require.NoError(t, err, "failed to issue the server certificate")
+	serverCert := testutil.MustIssueCertificate(t, pkix.Name{CommonName: "example.com"}, tlsServer.addr())
 
-	err = tlsServer.start(&tls.Config{
+	err := tlsServer.start(&tls.Config{
 		Certificates: []tls.Certificate{*serverCert},
 	})
 	require.NoError(t, err, "failed to start a TLS echo server")
@@ -593,30 +527,23 @@ func TestNewTLSListner_can_read_messages_from_client(t *testing.T) {
 func TestNewTLSListner_can_serve_if_client_does_not_support_SNI(t *testing.T) {
 	t.Parallel()
 
-	if rootCACert == nil {
-		t.Fatal("rootCACert is not initialized")
-	}
-
-	rootCAs := x509.NewCertPool()
-	rootCAs.AddCert(rootCACert.Leaf)
-
-	clientRootCAs := x509.NewCertPool()
-	clientRootCAs.AddCert(mitmCACert.Leaf)
+	mitmCACert := testutil.MITMCACert(t)
+	rootCAs := testutil.RootCAs(t)
+	clientRootCAs := testutil.ClientRootCAs(t)
 
 	// start a true server
 	tlsServer := newTLSEchoServer(t)
 
-	serverCert, err := issueCertificate(pkix.Name{CommonName: "example.com"}, tlsServer.addr())
-	require.NoError(t, err, "failed to issue the server certificate")
+	serverCert := testutil.MustIssueCertificate(t, pkix.Name{CommonName: "example.com"}, tlsServer.addr())
 
-	err = tlsServer.start(&tls.Config{
+	err := tlsServer.start(&tls.Config{
 		Certificates: []tls.Certificate{*serverCert},
 	})
 	require.NoError(t, err, "failed to start a TLS echo server")
 	defer tlsServer.close()
 
 	// start an MITM server
-	l := newTCPListener(t)
+	l := testutil.NewTCPListener(t)
 	tl, err := mitm.NewTLSListener(l, &mitm.TLSConfig{
 		RootCertificate: mitmCACert,
 		GetDestination: func(conn net.Conn, serverName string) net.Addr {
@@ -667,15 +594,8 @@ func TestNewTLSListner_can_serve_if_client_does_not_support_SNI(t *testing.T) {
 func TestNewTLSListner_can_handle_invalid_client(t *testing.T) {
 	t.Parallel()
 
-	if rootCACert == nil {
-		t.Fatal("rootCACert is not initialized")
-	}
-
-	rootCAs := x509.NewCertPool()
-	rootCAs.AddCert(rootCACert.Leaf)
-
-	clientRootCAs := x509.NewCertPool()
-	clientRootCAs.AddCert(mitmCACert.Leaf)
+	mitmCACert := testutil.MITMCACert(t)
+	rootCAs := testutil.RootCAs(t)
 
 	tlsServer, tl := setupServer(t, &mitm.TLSConfig{
 		RootCertificate: mitmCACert,
@@ -687,10 +607,9 @@ func TestNewTLSListner_can_handle_invalid_client(t *testing.T) {
 	defer tl.Close()
 
 	// start a true server
-	serverCert, err := issueCertificate(pkix.Name{CommonName: "example.com"}, tlsServer.addr())
-	require.NoError(t, err, "failed to issue the server certificate")
+	serverCert := testutil.MustIssueCertificate(t, pkix.Name{CommonName: "example.com"}, tlsServer.addr())
 
-	err = tlsServer.start(&tls.Config{
+	err := tlsServer.start(&tls.Config{
 		Certificates: []tls.Certificate{*serverCert},
 	})
 	require.NoError(t, err, "failed to start a TLS echo server")
