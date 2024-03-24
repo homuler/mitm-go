@@ -124,7 +124,6 @@ func (h *proxyHandler) serveInnerConn(conn net.Conn, destination *url.URL) error
 		if !errors.Is(inerr, syscall.EINVAL) {
 			err = inerr
 		}
-		fmt.Println("serve done")
 	}()
 
 	<-close
