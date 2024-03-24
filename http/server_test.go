@@ -182,7 +182,7 @@ func TestProxyServer_can_proxy_http1_by_default(t *testing.T) {
 	server.Start()
 	defer server.Close()
 
-	proxyServer := mitmHttp.NewProxyServer(&mitm.TLSConfig{})
+	proxyServer := mitmHttp.NewProxyServer(nil)
 	defer proxyServer.Close()
 
 	l := testutil.NewTCPListener(t)

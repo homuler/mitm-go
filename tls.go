@@ -62,6 +62,9 @@ var (
 )
 
 func (c *TLSConfig) Clone() *TLSConfig {
+	if c == nil {
+		return &TLSConfig{}
+	}
 	return &TLSConfig{
 		RootCertificate: c.RootCertificate,
 		GetDestination:  c.GetDestination,
