@@ -19,6 +19,7 @@ import (
 	"github.com/homuler/mitm-proxy-go/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/net/http2"
 )
 
 func newHTTPServer() *httptest.Server {
@@ -95,7 +96,7 @@ func serializeRequest(w io.Writer, r *http.Request) {
 	json.NewEncoder(w).Encode(req)
 }
 
-func runHTTPTests(t *testing.T, server *httptest.Server, client *http.Client) {
+func runHTTPTests(t *testing.T, server *httptest.Server, client *http.Client, proto string) {
 	scheme := "http"
 	if server.TLS != nil {
 		scheme = "https"
@@ -179,7 +180,7 @@ func runHTTPTests(t *testing.T, server *httptest.Server, client *http.Client) {
 
 			assert.Equal(t, c.method, serverReq.Method, "unexpected method")
 			assert.Equal(t, fmt.Sprintf("%s?status=%d", c.path, c.status), serverReq.URL, "unexpected url")
-			assert.Equal(t, "HTTP/1.1", serverReq.Proto, "unexpected protocol version")
+			assert.Equal(t, proto, serverReq.Proto, "unexpected protocol version")
 
 			body, err := io.ReadAll(serverReq.Body)
 			require.NoError(t, err)
@@ -214,7 +215,7 @@ func TestProxyServer_can_proxy_http1_through_http(t *testing.T) {
 		},
 	}
 
-	runHTTPTests(t, server, client)
+	runHTTPTests(t, server, client, "HTTP/1.1")
 }
 
 func TestProxyServer_can_proxy_http1_through_https(t *testing.T) {
@@ -260,7 +261,7 @@ func TestProxyServer_can_proxy_http1_through_https(t *testing.T) {
 		},
 	}
 
-	runHTTPTests(t, server, client)
+	runHTTPTests(t, server, client, "HTTP/1.1")
 }
 
 func TestProxyServer_can_proxy_http1_secure_through_http(t *testing.T) {
@@ -308,7 +309,7 @@ func TestProxyServer_can_proxy_http1_secure_through_http(t *testing.T) {
 		},
 	}
 
-	runHTTPTests(t, server, client)
+	runHTTPTests(t, server, client, "HTTP/1.1")
 }
 
 func TestProxyServer_can_proxy_http1_secure_through_https(t *testing.T) {
@@ -358,5 +359,106 @@ func TestProxyServer_can_proxy_http1_secure_through_https(t *testing.T) {
 		},
 	}
 
-	runHTTPTests(t, server, client)
+	runHTTPTests(t, server, client, "HTTP/1.1")
+}
+
+func TestProxyServer_can_proxy_http2_through_http(t *testing.T) {
+	t.Parallel()
+
+	server := newHTTPServer()
+	cert := testutil.MustIssueCertificate(t, pkix.Name{CommonName: "example.com"}, server.Listener.Addr())
+	server.TLS = &tls.Config{
+		Certificates: []tls.Certificate{*cert},
+		NextProtos:   []string{"h2", "http/1.1"},
+	}
+	server.StartTLS()
+	defer server.Close()
+
+	l := testutil.NewTCPListener(t)
+	defer l.Close()
+
+	rootCAs := testutil.RootCAs(t)
+	handler := mitmHttp.NewRoundTripHandler(func(r *http.Request) http.RoundTripper {
+		assert.Equalf(t, r.Proto, "HTTP/2.0", "unexpected protocol version")
+
+		return &http2.Transport{
+			TLSClientConfig: &tls.Config{
+				RootCAs:    rootCAs,
+				NextProtos: []string{"h2"},
+			},
+		}
+	})
+	proxyServer := newHTTPSProxyServer(t, mitmHttp.Handler(handler))
+	defer proxyServer.Close()
+
+	go func() {
+		proxyServer.Serve(l)
+	}()
+
+	proxyURL, err := url.Parse(fmt.Sprintf("http://%s", l.Addr().String()))
+	require.NoError(t, err)
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyURL(proxyURL),
+			TLSClientConfig: &tls.Config{
+				RootCAs: testutil.ClientRootCAs(t),
+			},
+			ForceAttemptHTTP2: true,
+		},
+	}
+
+	runHTTPTests(t, server, client, "HTTP/2.0")
+}
+
+func TestProxyServer_can_proxy_http2_through_https(t *testing.T) {
+	t.Parallel()
+
+	server := newHTTPServer()
+	cert := testutil.MustIssueCertificate(t, pkix.Name{CommonName: "example.com"}, server.Listener.Addr())
+	server.TLS = &tls.Config{
+		Certificates: []tls.Certificate{*cert},
+		NextProtos:   []string{"h2", "http/1.1"},
+	}
+	server.StartTLS()
+	defer server.Close()
+
+	l := testutil.NewTCPListener(t)
+	defer l.Close()
+
+	rootCAs := testutil.RootCAs(t)
+	proxyCert := testutil.MustIssueCertificate(t, pkix.Name{CommonName: "mitm-go.org"}, l.Addr())
+	handler := mitmHttp.NewRoundTripHandler(func(r *http.Request) http.RoundTripper {
+		assert.Equalf(t, r.Proto, "HTTP/2.0", "unexpected protocol version")
+
+		return &http2.Transport{
+			TLSClientConfig: &tls.Config{
+				RootCAs:    rootCAs,
+				NextProtos: []string{"h2"},
+			},
+		}
+	})
+	proxyServer := newHTTPSProxyServer(t,
+		mitmHttp.TLSConfig(&tls.Config{Certificates: []tls.Certificate{*proxyCert}, NextProtos: []string{"http/1.1"}}), // use HTTP/1.1 CONNECT
+		mitmHttp.Handler(handler))
+	defer proxyServer.Close()
+
+	go func() {
+		proxyServer.ServeTLS(l, "", "")
+	}()
+
+	proxyURL, err := url.Parse(fmt.Sprintf("https://%s", l.Addr().String()))
+	require.NoError(t, err)
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyURL(proxyURL),
+			TLSClientConfig: &tls.Config{
+				RootCAs: testutil.ClientRootCAs(t),
+			},
+			ForceAttemptHTTP2: true,
+		},
+	}
+
+	runHTTPTests(t, server, client, "HTTP/2.0")
 }
