@@ -23,12 +23,19 @@ type tlsEchoServer struct {
 	err error
 }
 
-func newTLSEchoServer() (*tlsEchoServer, error) {
-	l, err := net.ListenTCP("tcp", &net.TCPAddr{})
+func newTCPListener(t *testing.T) net.Listener {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return nil, err
+		if l, err = net.Listen("tcp6", "[::1]:0"); err != nil {
+			t.Fatalf("failed to listen on a port: %v", err)
+		}
 	}
-	return &tlsEchoServer{l: l}, nil
+	return l
+}
+
+func newTLSEchoServer(t *testing.T) *tlsEchoServer {
+	l := newTCPListener(t)
+	return &tlsEchoServer{l: l}
 }
 
 func (s *tlsEchoServer) addr() net.Addr {
@@ -108,13 +115,10 @@ func setupServer(t *testing.T, mitmConfig *mitm.TLSConfig) (*tlsEchoServer, net.
 	t.Helper()
 
 	// start a true server
-	tlsServer, err := newTLSEchoServer()
-	require.NoError(t, err, "failed to create a TLS echo server")
+	tlsServer := newTLSEchoServer(t)
 
 	// start an MITM server
-	l, err := net.ListenTCP("tcp", &net.TCPAddr{})
-	require.NoError(t, err, "failed to create an MITM server")
-
+	l := newTCPListener(t)
 	mitmConfig.GetDestination = func(conn net.Conn, serverName string) net.Addr {
 		return tlsServer.addr()
 	}
@@ -600,8 +604,7 @@ func TestNewTLSListner_can_serve_if_client_does_not_support_SNI(t *testing.T) {
 	clientRootCAs.AddCert(mitmCACert.Leaf)
 
 	// start a true server
-	tlsServer, err := newTLSEchoServer()
-	require.NoError(t, err, "failed to create a TLS echo server")
+	tlsServer := newTLSEchoServer(t)
 
 	serverCert, err := issueCertificate(pkix.Name{CommonName: "example.com"}, tlsServer.addr())
 	require.NoError(t, err, "failed to issue the server certificate")
@@ -613,9 +616,7 @@ func TestNewTLSListner_can_serve_if_client_does_not_support_SNI(t *testing.T) {
 	defer tlsServer.close()
 
 	// start an MITM server
-	l, err := net.ListenTCP("tcp", &net.TCPAddr{})
-	require.NoError(t, err, "failed to create an MITM server")
-
+	l := newTCPListener(t)
 	tl, err := mitm.NewTLSListener(l, &mitm.TLSConfig{
 		RootCertificate: mitmCACert,
 		GetDestination: func(conn net.Conn, serverName string) net.Addr {
