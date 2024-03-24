@@ -210,7 +210,7 @@ func tlsServer(conn net.Conn, config *TLSConfig) *tls.Conn {
 	if err != nil {
 		// let tls.Server to handle the error.
 		// The same error should occur because the same message will be read.
-		c := NewTamperedConn(tlsConn.conn,
+		c := NewProxyConn(tlsConn.conn, nil,
 			TamperConnRead(tlsConn.reader.OneTimeReader().Read),
 			TamperConnClose(closeTLSConn))
 		return tls.Server(c, nil)
