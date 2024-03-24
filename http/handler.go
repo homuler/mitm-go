@@ -132,7 +132,10 @@ func (h *proxyHandler) serveInnerConn(conn net.Conn, destination *url.URL) error
 }
 
 func Proxify(handler http.Handler, tlsConfig *mitm.TLSConfig) *proxyHandler {
-	config := tlsConfig.Clone()
+	return proxify(handler, tlsConfig.Clone())
+}
+
+func proxify(handler http.Handler, config *mitm.TLSConfig) *proxyHandler {
 	if config.ServerInfoCache == nil {
 		config.ServerInfoCache = make(mitm.ServerInfoCache)
 	}

@@ -33,7 +33,7 @@ func newHTTPServer() *httptest.Server {
 		serializeRequest(w, r)
 	}))
 
-	return httptest.NewServer(mux)
+	return httptest.NewUnstartedServer(mux)
 }
 
 type request struct {
@@ -84,12 +84,11 @@ func serializeRequest(w io.Writer, r *http.Request) {
 func TestProxyServer_can_proxy_http1_by_default(t *testing.T) {
 	t.Parallel()
 
-	mitmCACert := testutil.MITMCACert(t)
-
 	server := newHTTPServer()
+	server.Start()
 	defer server.Close()
 
-	proxyServer := mitmHttp.NewProxyServer(*mitmCACert)
+	proxyServer := mitmHttp.NewProxyServer(&mitm.TLSConfig{})
 	defer proxyServer.Close()
 
 	l := testutil.NewTCPListener(t)

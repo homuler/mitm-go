@@ -19,8 +19,8 @@ func main() {
 		panic(err)
 	}
 
-	mitmHttpServer := http.NewTProxyServer(rootCert)
-	mitmHttpsServer := http.NewTProxyServer(rootCert)
+	mitmHttpServer := http.NewTProxyServer(&mitm.TLSConfig{RootCertificate: &rootCert})
+	mitmHttpsServer := http.NewTProxyServer(&mitm.TLSConfig{RootCertificate: &rootCert})
 	mitmHttp3Server := http3.NewTProxyServer(rootCert)
 
 	httpLn, err := tproxy.ListenTCP("tcp", &net.TCPAddr{IP: net.ParseIP("0.0.0.0"), Port: 8080})

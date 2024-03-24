@@ -64,6 +64,7 @@ func ClientRootCAs(t *testing.T) *x509.CertPool {
 	t.Helper()
 
 	pool := x509.NewCertPool()
+	pool.AddCert(RootCACert(t).Leaf)
 	pool.AddCert(MITMCACert(t).Leaf)
 	return pool
 }

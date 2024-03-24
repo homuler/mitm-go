@@ -34,9 +34,7 @@ func GetDestination(r *http.Request) (dstAddr net.Addr, ok bool) {
 }
 
 type proxyServer struct {
-	server     *http.Server
-	rootCert   tls.Certificate
-	nextProtos []string
+	http.Server
 }
 
 type ProxyServerOption func(*proxyServer) error
@@ -47,7 +45,7 @@ type ProxyServerOption func(*proxyServer) error
 // See net.Dial for details of the address format.
 func Addr(addr string) ProxyServerOption {
 	return func(psrv *proxyServer) error {
-		psrv.server.Addr = addr
+		psrv.Server.Addr = addr
 		return nil
 	}
 }
@@ -55,7 +53,7 @@ func Addr(addr string) ProxyServerOption {
 // Handler specifies the handler to invoke, RoundTripHandler if nil
 func Handler(h http.Handler) ProxyServerOption {
 	return func(psrv *proxyServer) error {
-		psrv.server.Handler = h
+		psrv.Server.Handler = h
 		return nil
 	}
 }
@@ -64,7 +62,20 @@ func Handler(h http.Handler) ProxyServerOption {
 // otherwise responds with 200 OK and Content-Length: 0.
 func DisableGeneralOptionsHandler(v bool) ProxyServerOption {
 	return func(psrv *proxyServer) error {
-		psrv.server.DisableGeneralOptionsHandler = v
+		psrv.Server.DisableGeneralOptionsHandler = v
+		return nil
+	}
+}
+
+// TLSConfig optionally provides a TLS configuration for use
+// by ServeTLS. Note that this value is cloned by ServeTLS,
+// so it's not possible to modify the configuration with methods
+// like tls.Config.SetSessionTicketKeys. To use
+// SetSessionTicketKeys, use Server.Serve with a TLS Listener
+// instead.
+func TLSConfig(c *tls.Config) ProxyServerOption {
+	return func(psrv *proxyServer) error {
+		psrv.Server.TLSConfig = c
 		return nil
 	}
 }
@@ -79,7 +90,7 @@ func DisableGeneralOptionsHandler(v bool) ProxyServerOption {
 // ReadHeaderTimeout. It is valid to use them both.
 func ReadTimeout(d time.Duration) ProxyServerOption {
 	return func(psrv *proxyServer) error {
-		psrv.server.ReadTimeout = d
+		psrv.Server.ReadTimeout = d
 		return nil
 	}
 }
@@ -92,7 +103,7 @@ func ReadTimeout(d time.Duration) ProxyServerOption {
 // zero, there is no timeout.
 func ReadHeaderTimeout(d time.Duration) ProxyServerOption {
 	return func(psrv *proxyServer) error {
-		psrv.server.ReadHeaderTimeout = d
+		psrv.Server.ReadHeaderTimeout = d
 		return nil
 	}
 }
@@ -104,7 +115,7 @@ func ReadHeaderTimeout(d time.Duration) ProxyServerOption {
 // A zero or negative value means there will be no timeout.
 func WriteTimeout(d time.Duration) ProxyServerOption {
 	return func(psrv *proxyServer) error {
-		psrv.server.WriteTimeout = d
+		psrv.Server.WriteTimeout = d
 		return nil
 	}
 }
@@ -115,7 +126,7 @@ func WriteTimeout(d time.Duration) ProxyServerOption {
 // zero, there is no timeout.
 func IdleTimeout(d time.Duration) ProxyServerOption {
 	return func(psrv *proxyServer) error {
-		psrv.server.IdleTimeout = d
+		psrv.Server.IdleTimeout = d
 		return nil
 	}
 }
@@ -127,7 +138,7 @@ func IdleTimeout(d time.Duration) ProxyServerOption {
 // If zero, http.DefaultMaxHeaderBytes is used.
 func MaxHeaderBytes(v int) ProxyServerOption {
 	return func(psrv *proxyServer) error {
-		psrv.server.MaxHeaderBytes = v
+		psrv.Server.MaxHeaderBytes = v
 		return nil
 	}
 }
@@ -143,14 +154,7 @@ func MaxHeaderBytes(v int) ProxyServerOption {
 // automatically.
 func TLSNextProto(m map[string]func(*http.Server, *tls.Conn, http.Handler)) ProxyServerOption {
 	return func(psrv *proxyServer) error {
-		psrv.server.TLSNextProto = m
-		return nil
-	}
-}
-
-func TLSNextProtos(protos []string) ProxyServerOption {
-	return func(psrv *proxyServer) error {
-		psrv.nextProtos = protos
+		psrv.Server.TLSNextProto = m
 		return nil
 	}
 }
@@ -160,7 +164,7 @@ func TLSNextProtos(protos []string) ProxyServerOption {
 // ConnState type and associated constants for details.
 func ConnState(f func(net.Conn, http.ConnState)) ProxyServerOption {
 	return func(psrv *proxyServer) error {
-		psrv.server.ConnState = f
+		psrv.Server.ConnState = f
 		return nil
 	}
 }
@@ -171,7 +175,7 @@ func ConnState(f func(net.Conn, http.ConnState)) ProxyServerOption {
 // If nil, logging is done via the log package's standard logger.
 func ErrorLog(l *log.Logger) ProxyServerOption {
 	return func(psrv *proxyServer) error {
-		psrv.server.ErrorLog = l
+		psrv.Server.ErrorLog = l
 		return nil
 	}
 }
@@ -184,7 +188,7 @@ func ErrorLog(l *log.Logger) ProxyServerOption {
 // If non-nil, it must return a non-nil context.
 func BaseContext(f func(net.Listener) context.Context) ProxyServerOption {
 	return func(psrv *proxyServer) error {
-		psrv.server.BaseContext = f
+		psrv.Server.BaseContext = f
 		return nil
 	}
 }
@@ -195,108 +199,91 @@ func BaseContext(f func(net.Listener) context.Context) ProxyServerOption {
 // value.
 func ConnContext(f func(ctx context.Context, c net.Conn) context.Context) ProxyServerOption {
 	return func(psrv *proxyServer) error {
-		psrv.server.ConnContext = f
+		psrv.Server.ConnContext = f
 		return nil
 	}
-}
-
-func (psrv *proxyServer) Close() error {
-	return psrv.server.Close()
-}
-
-func (psrv *proxyServer) Shutdown(ctx context.Context) error {
-	return psrv.server.Shutdown(ctx)
-}
-
-func (psrv *proxyServer) RegisterOnShutdown(f func()) {
-	psrv.server.RegisterOnShutdown(f)
-}
-
-func (psrv *proxyServer) Serve(l net.Listener) error {
-	return psrv.server.Serve(l)
 }
 
 type ProxyServer struct {
 	*proxyServer
 }
 
-func NewProxyServer(rootCert tls.Certificate, options ...ProxyServerOption) ProxyServer {
+func NewProxyServer(config *mitm.TLSConfig, options ...ProxyServerOption) ProxyServer {
 	psrv := &proxyServer{
-		server: &http.Server{
+		http.Server{
 			Handler: RoundTripHandlerFunc,
 		},
-		nextProtos: []string{"h2", "http/1.1"},
-		rootCert:   rootCert,
 	}
 	for _, opt := range options {
 		opt(psrv)
 	}
 
-	if psrv.server.ConnContext == nil {
-		psrv.server.ConnContext = WithConn
+	if psrv.Server.ConnContext == nil {
+		psrv.Server.ConnContext = WithConn
 	} else {
-		connContext := psrv.server.ConnContext
-		psrv.server.ConnContext = func(ctx context.Context, c net.Conn) context.Context {
+		connContext := psrv.Server.ConnContext
+		psrv.Server.ConnContext = func(ctx context.Context, c net.Conn) context.Context {
 			return connContext(WithConn(ctx, c), c)
 		}
 	}
 
-	psrv.server.Handler = Proxify(psrv.server.Handler, &mitm.TLSConfig{
-		RootCertificate: &psrv.rootCert,
-		NextProtos:      psrv.nextProtos,
-	})
-	return ProxyServer{psrv}
-}
+	config = config.Clone()
+	if config.NextProtos == nil {
+		config.NextProtos = []string{"h2", "http/1.1"}
+	}
 
-func (psrv ProxyServer) ServeTLS(l net.Listener, certFile, keyFile string) error {
-	return psrv.server.ServeTLS(l, certFile, keyFile)
+	psrv.Server.Handler = Proxify(psrv.Server.Handler, config)
+	return ProxyServer{psrv}
 }
 
 type TProxyServer struct {
 	*proxyServer
+	config *mitm.TLSConfig
 }
 
 func tproxyConnContext(ctx context.Context, c net.Conn) context.Context {
 	return WithDestination(ctx, c.LocalAddr())
 }
 
-func NewTProxyServer(rootCert tls.Certificate, options ...ProxyServerOption) TProxyServer {
+func NewTProxyServer(config *mitm.TLSConfig, options ...ProxyServerOption) TProxyServer {
 	psrv := &proxyServer{
-		server: &http.Server{
+		http.Server{
 			Handler: RoundTripHandlerFunc,
 		},
-		nextProtos: []string{"h2", "http/1.1"},
-		rootCert:   rootCert,
 	}
 	for _, opt := range options {
 		opt(psrv)
 	}
 
-	if psrv.server.ConnContext == nil {
-		psrv.server.ConnContext = tproxyConnContext
+	if psrv.Server.ConnContext == nil {
+		psrv.Server.ConnContext = tproxyConnContext
 	} else {
-		connContext := psrv.server.ConnContext
-		psrv.server.ConnContext = func(ctx context.Context, c net.Conn) context.Context {
+		connContext := psrv.Server.ConnContext
+		psrv.Server.ConnContext = func(ctx context.Context, c net.Conn) context.Context {
 			return connContext(tproxyConnContext(ctx, c), c)
 		}
 	}
-	psrv.server.Handler = &tproxyHandler{handler: psrv.server.Handler}
+	psrv.Server.Handler = &tproxyHandler{handler: psrv.Server.Handler}
 
-	return TProxyServer{psrv}
+	config = config.Clone()
+	if config.NextProtos == nil {
+		config.NextProtos = []string{"h2", "http/1.1"}
+	}
+	if config.GetDestination == nil {
+		config.GetDestination = func(conn net.Conn, serverName string) net.Addr {
+			return conn.LocalAddr()
+		}
+	}
+
+	return TProxyServer{proxyServer: psrv, config: config}
 }
 
 func (psrv TProxyServer) ServeTLS(l net.Listener) error {
-	tl, err := mitm.NewTLSListener(l, &mitm.TLSConfig{
-		RootCertificate: &psrv.rootCert,
-		NextProtos:      psrv.nextProtos,
-		GetDestination: func(conn net.Conn, serverName string) net.Addr {
-			return conn.LocalAddr()
-		},
-	})
+	tl, err := mitm.NewTLSListener(l, psrv.config)
 	if err != nil {
 		return err
 	}
-	return psrv.server.Serve(tl)
+	return psrv.Server.Serve(tl)
 }
 
 func CopyAsProxyRequest(req *http.Request, dest string) *http.Request {

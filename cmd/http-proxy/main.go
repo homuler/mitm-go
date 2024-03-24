@@ -17,8 +17,8 @@ func main() {
 		panic(err)
 	}
 
-	mitmHttpServer := mitmhttp.NewProxyServer(rootCert)
-	mitmHttpsServer := mitmhttp.NewProxyServer(rootCert)
+	mitmHttpServer := mitmhttp.NewProxyServer(&mitm.TLSConfig{RootCertificate: &rootCert})
+	mitmHttpsServer := mitmhttp.NewProxyServer(&mitm.TLSConfig{RootCertificate: &rootCert})
 
 	httpLn, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.ParseIP("0.0.0.0"), Port: 8080})
 	if err != nil {
