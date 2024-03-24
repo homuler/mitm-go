@@ -37,6 +37,19 @@ func newHTTPServer() *httptest.Server {
 	return httptest.NewUnstartedServer(mux)
 }
 
+func newHTTPSProxyServer(t *testing.T, options ...mitmHttp.ProxyServerOption) mitmHttp.ProxyServer {
+	return mitmHttp.NewProxyServer(&mitm.TLSConfig{
+		RootCertificate: testutil.MITMCACert(t),
+		GetClientConfig: func(serverName string, alpnProtocols []string) *tls.Config {
+			return &tls.Config{
+				RootCAs:    testutil.RootCAs(t),
+				ServerName: serverName,
+				NextProtos: alpnProtocols,
+			}
+		},
+	}, options...)
+}
+
 type request struct {
 	Proto  string
 	Method string
@@ -204,11 +217,54 @@ func TestProxyServer_can_proxy_http1_by_default(t *testing.T) {
 	runHTTPTests(t, server, client)
 }
 
-func TestProxyServer_can_proxy_http1_through_http1_connect(t *testing.T) {
+func TestProxyServer_can_proxy_http1_through_https(t *testing.T) {
 	t.Parallel()
 
-	mitmCACert := testutil.MITMCACert(t)
+	server := newHTTPServer()
+	server.Start()
+	defer server.Close()
+
+	l := testutil.NewTCPListener(t)
+	defer l.Close()
+
 	rootCAs := testutil.RootCAs(t)
+	proxyCert := testutil.MustIssueCertificate(t, pkix.Name{CommonName: "mitm-go.org"}, l.Addr())
+	handler := mitmHttp.NewRoundTripHandler(func(r *http.Request) http.RoundTripper {
+		assert.Equalf(t, r.Proto, "HTTP/1.1", "unexpected protocol version")
+
+		return &http.Transport{
+			TLSClientConfig: &tls.Config{
+				RootCAs: rootCAs,
+			},
+			DisableKeepAlives: true,
+		}
+	})
+	proxyServer := newHTTPSProxyServer(t,
+		mitmHttp.TLSConfig(&tls.Config{Certificates: []tls.Certificate{*proxyCert}}),
+		mitmHttp.Handler(handler))
+	defer proxyServer.Close()
+
+	go func() {
+		proxyServer.ServeTLS(l, "", "")
+	}()
+
+	proxyURL, err := url.Parse(fmt.Sprintf("https://%s", l.Addr().String()))
+	require.NoError(t, err)
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyURL(proxyURL),
+			TLSClientConfig: &tls.Config{
+				RootCAs: testutil.ClientRootCAs(t),
+			},
+		},
+	}
+
+	runHTTPTests(t, server, client)
+}
+
+func TestProxyServer_can_proxy_http1_through_http1_connect(t *testing.T) {
+	t.Parallel()
 
 	server := newHTTPServer()
 	cert := testutil.MustIssueCertificate(t, pkix.Name{CommonName: "example.com"}, server.Listener.Addr())
@@ -222,6 +278,7 @@ func TestProxyServer_can_proxy_http1_through_http1_connect(t *testing.T) {
 	l := testutil.NewTCPListener(t)
 	defer l.Close()
 
+	rootCAs := testutil.RootCAs(t)
 	proxyCert := testutil.MustIssueCertificate(t, pkix.Name{CommonName: "mitm-go.org"}, l.Addr())
 	handler := mitmHttp.NewRoundTripHandler(func(r *http.Request) http.RoundTripper {
 		assert.Equalf(t, r.Proto, "HTTP/1.1", "unexpected protocol version")
@@ -233,18 +290,9 @@ func TestProxyServer_can_proxy_http1_through_http1_connect(t *testing.T) {
 			DisableKeepAlives: true,
 		}
 	})
-	proxyServer := mitmHttp.NewProxyServer(&mitm.TLSConfig{
-		RootCertificate: mitmCACert,
-		GetClientConfig: func(serverName string, alpnProtocols []string) *tls.Config {
-			return &tls.Config{
-				RootCAs:    rootCAs,
-				ServerName: serverName,
-				NextProtos: alpnProtocols,
-			}
-		},
-	}, mitmHttp.TLSConfig(&tls.Config{
-		Certificates: []tls.Certificate{*proxyCert},
-	}), mitmHttp.Handler(handler))
+	proxyServer := newHTTPSProxyServer(t,
+		mitmHttp.TLSConfig(&tls.Config{Certificates: []tls.Certificate{*proxyCert}}),
+		mitmHttp.Handler(handler))
 	defer proxyServer.Close()
 
 	go func() {
