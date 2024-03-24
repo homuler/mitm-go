@@ -6,7 +6,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"net/url"
 	"time"
 
 	"github.com/homuler/mitm-proxy-go"
@@ -300,17 +299,8 @@ func (psrv TProxyServer) ServeTLS(l net.Listener) error {
 	return psrv.server.Serve(tl)
 }
 
-var (
-	httpScheme  = "http"
-	httpsScheme = "https"
-)
-
 func CopyAsProxyRequest(req *http.Request, dest string) *http.Request {
 	proxyReq := req.Clone(req.Context())
-	scheme := httpsScheme
-	if req.TLS == nil {
-		scheme = httpScheme
-	}
-	proxyReq.URL = &url.URL{Scheme: scheme, Host: dest}
+	proxyReq.URL.Host = dest
 	return proxyReq
 }

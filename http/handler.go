@@ -41,7 +41,7 @@ func (h *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	h.handler.ServeHTTP(w, CopyAsProxyRequest(r, r.URL.Host))
+	h.handler.ServeHTTP(w, r)
 }
 
 func (h *proxyHandler) handleHTTP1Connect(w http.ResponseWriter, r *http.Request) {
