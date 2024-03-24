@@ -188,7 +188,7 @@ func runHTTPTests(t *testing.T, server *httptest.Server, client *http.Client) {
 	}
 }
 
-func TestProxyServer_can_proxy_http1_by_default(t *testing.T) {
+func TestProxyServer_can_proxy_http1_through_http(t *testing.T) {
 	t.Parallel()
 
 	server := newHTTPServer()
@@ -231,12 +231,12 @@ func TestProxyServer_can_proxy_http1_through_https(t *testing.T) {
 	proxyCert := testutil.MustIssueCertificate(t, pkix.Name{CommonName: "mitm-go.org"}, l.Addr())
 	handler := mitmHttp.NewRoundTripHandler(func(r *http.Request) http.RoundTripper {
 		assert.Equalf(t, r.Proto, "HTTP/1.1", "unexpected protocol version")
+		assert.NotNilf(t, r.TLS, "unexpected non-TLS connection")
 
 		return &http.Transport{
 			TLSClientConfig: &tls.Config{
 				RootCAs: rootCAs,
 			},
-			DisableKeepAlives: true,
 		}
 	})
 	proxyServer := newHTTPSProxyServer(t,
@@ -263,7 +263,55 @@ func TestProxyServer_can_proxy_http1_through_https(t *testing.T) {
 	runHTTPTests(t, server, client)
 }
 
-func TestProxyServer_can_proxy_http1_through_http1_connect(t *testing.T) {
+func TestProxyServer_can_proxy_http1_secure_through_http(t *testing.T) {
+	t.Parallel()
+
+	server := newHTTPServer()
+	cert := testutil.MustIssueCertificate(t, pkix.Name{CommonName: "example.com"}, server.Listener.Addr())
+	server.TLS = &tls.Config{
+		Certificates: []tls.Certificate{*cert},
+		NextProtos:   []string{"h2", "http/1.1"},
+	}
+	server.StartTLS()
+	defer server.Close()
+
+	l := testutil.NewTCPListener(t)
+	defer l.Close()
+
+	rootCAs := testutil.RootCAs(t)
+	handler := mitmHttp.NewRoundTripHandler(func(r *http.Request) http.RoundTripper {
+		assert.Equalf(t, r.Proto, "HTTP/1.1", "unexpected protocol version")
+		assert.NotNilf(t, r.TLS, "unexpected non-TLS connection")
+
+		return &http.Transport{
+			TLSClientConfig: &tls.Config{
+				RootCAs: rootCAs,
+			},
+		}
+	})
+	proxyServer := newHTTPSProxyServer(t, mitmHttp.Handler(handler))
+	defer proxyServer.Close()
+
+	go func() {
+		proxyServer.Serve(l)
+	}()
+
+	proxyURL, err := url.Parse(fmt.Sprintf("http://%s", l.Addr().String()))
+	require.NoError(t, err)
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyURL(proxyURL),
+			TLSClientConfig: &tls.Config{
+				RootCAs: testutil.ClientRootCAs(t),
+			},
+		},
+	}
+
+	runHTTPTests(t, server, client)
+}
+
+func TestProxyServer_can_proxy_http1_secure_through_https(t *testing.T) {
 	t.Parallel()
 
 	server := newHTTPServer()
@@ -287,7 +335,6 @@ func TestProxyServer_can_proxy_http1_through_http1_connect(t *testing.T) {
 			TLSClientConfig: &tls.Config{
 				RootCAs: rootCAs,
 			},
-			DisableKeepAlives: true,
 		}
 	})
 	proxyServer := newHTTPSProxyServer(t,
