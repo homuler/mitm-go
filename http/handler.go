@@ -41,7 +41,9 @@ func (h *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	h.handler.ServeHTTP(w, r)
+
+	// The request must be HTTP, not HTTPS
+	h.handler.ServeHTTP(w, normalizeHTTPRequest(r))
 }
 
 func (h *proxyHandler) handleHTTP1Connect(w http.ResponseWriter, r *http.Request) {
@@ -209,7 +211,7 @@ func handleRoundTrip(rt http.RoundTripper, w http.ResponseWriter, r *http.Reques
 }
 
 func newRoundTripper(r *http.Request) http.RoundTripper {
-	if r.TLS == nil {
+	if r.URL.Scheme == "http" || r.TLS == nil {
 		return &http.Transport{
 			DisableKeepAlives: true,
 		}
@@ -240,4 +242,36 @@ func newRoundTripper(r *http.Request) http.RoundTripper {
 			DisableKeepAlives: true,
 		}
 	}
+}
+
+var (
+	httpScheme  = "http"
+	httpsScheme = "https"
+)
+
+func CopyAsProxyRequest(req *http.Request, dest string) *http.Request {
+	proxyReq := req.Clone(req.Context())
+
+	if req.TLS != nil {
+		proxyReq.URL.Scheme = httpsScheme
+	} else {
+		proxyReq.URL.Scheme = httpScheme
+	}
+	proxyReq.URL.Host = dest
+
+	return proxyReq
+}
+
+func normalizeHTTPRequest(req *http.Request) *http.Request {
+	proxyReq := req.Clone(req.Context())
+
+	// When the request is sent through HTTP/2 proxy, the URL is not set in absolute-form,
+	// so we need to set the scheme and host manually.
+	// NOTE: In that case, req.Proto is "HTTP/2.0", which is left as it is here.
+	proxyReq.URL.Scheme = httpScheme
+	if proxyReq.URL.Host == "" {
+		proxyReq.URL.Host = proxyReq.Host
+	}
+
+	return proxyReq
 }

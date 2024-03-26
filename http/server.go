@@ -285,21 +285,3 @@ func (psrv TProxyServer) ServeTLS(l net.Listener) error {
 	}
 	return psrv.Server.Serve(tl)
 }
-
-var (
-	httpScheme  = "http"
-	httpsScheme = "https"
-)
-
-func CopyAsProxyRequest(req *http.Request, dest string) *http.Request {
-	proxyReq := req.Clone(req.Context())
-
-	if req.TLS != nil {
-		proxyReq.URL.Scheme = httpsScheme
-	} else {
-		proxyReq.URL.Scheme = httpScheme
-	}
-	proxyReq.URL.Host = dest
-
-	return proxyReq
-}
