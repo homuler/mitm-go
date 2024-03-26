@@ -491,7 +491,109 @@ func createTempCertPEM(t *testing.T, cert *tls.Certificate, name string) *os.Fil
 	return f
 }
 
-func TestProxyServer_can_proxy_http2_through_http2(t *testing.T) {
+func runHTTP2ProxyTests(t *testing.T, server *httptest.Server, proxyURL *url.URL, proto string) {
+	t.Helper()
+
+	scheme := "http"
+	if server.TLS != nil {
+		scheme = "https"
+	}
+
+	rootCACertFile := createTempCertPEM(t, testutil.RootCACert(t), "rootCA.pem")
+	defer os.Remove(rootCACertFile.Name())
+
+	mitmCACertFile := createTempCertPEM(t, testutil.MITMCACert(t), "mitmCA.pem")
+	defer os.Remove(mitmCACertFile.Name())
+
+	buildCurlArgs := func(c httpTestCase) []string {
+		url := fmt.Sprintf("%s://%s%s?status=%d", scheme, server.Listener.Addr(), c.path, c.status)
+
+		args := make([]string, 0)
+		if c.method == http.MethodHead {
+			args = append(args, "--head")
+		} else {
+			args = append(args, "-X", c.method, "-d", c.body)
+		}
+
+		if proto == "HTTP/2.0" {
+			args = append(args, "--http2")
+		} else if proto == "HTTP/1.1" {
+			args = append(args, "--http1.1")
+		}
+
+		args = append(args,
+			"-s", "--proxy-cacert", rootCACertFile.Name(), "--proxy-http2", "-x", proxyURL.String(),
+			"--cacert", mitmCACertFile.Name(), url)
+		return args
+	}
+
+	for _, c := range httpTestCases {
+		c := c
+
+		t.Run(c.name, func(t *testing.T) {
+			// TODO: stop using curl
+			args := buildCurlArgs(c)
+			curl := exec.Command("curl", args...)
+			curl.Env = append(curl.Env, "SSLKEYLOGFILE=/home/homuler/sslkeylogfile.txt")
+			bs, err := curl.CombinedOutput()
+			require.NoErrorf(t, err, "failed to execute curl")
+
+			if c.method == http.MethodHead {
+				return // no body
+			}
+
+			// the request that the true server received
+			var serverReq request
+			require.NoErrorf(t, json.NewDecoder(bytes.NewBuffer(bs)).Decode(&serverReq), "failed to decode the response body")
+
+			assert.Equal(t, c.method, serverReq.Method, "unexpected method")
+			assert.Equal(t, fmt.Sprintf("%s?status=%d", c.path, c.status), serverReq.URL, "unexpected url")
+			assert.Equal(t, proto, serverReq.Proto, "unexpected protocol version")
+
+			body, err := io.ReadAll(serverReq.Body)
+			require.NoError(t, err)
+			assert.Equal(t, c.body, string(body))
+		})
+	}
+}
+
+func TestProxyServer_can_proxy_http1_through_http2(t *testing.T) {
+	t.Parallel()
+
+	server := newHTTPServer()
+	server.Start()
+	defer server.Close()
+
+	l := testutil.NewTCPListener(t)
+	defer l.Close()
+
+	rootCAs := testutil.RootCAs(t)
+	proxyCert := testutil.MustIssueCertificate(t, pkix.Name{CommonName: "mitm-go.org"}, l.Addr())
+	handler := mitmHttp.NewRoundTripHandler(func(r *http.Request) http.RoundTripper {
+		assert.Equalf(t, "HTTP/2.0", r.Proto, "unexpected protocol version")
+
+		return &http.Transport{
+			TLSClientConfig: &tls.Config{
+				RootCAs: rootCAs,
+			},
+		}
+	})
+	proxyServer := newHTTPSProxyServer(t,
+		mitmHttp.TLSConfig(&tls.Config{Certificates: []tls.Certificate{*proxyCert}}), // use HTTP/2 CONNECT
+		mitmHttp.Handler(handler))
+	defer proxyServer.Close()
+
+	go func() {
+		proxyServer.ServeTLS(l, "", "")
+	}()
+
+	proxyURL, err := url.Parse(fmt.Sprintf("https://%s", l.Addr().String()))
+	require.NoError(t, err)
+
+	runHTTP2ProxyTests(t, server, proxyURL, "HTTP/1.1")
+}
+
+func TestProxyServer_can_proxy_http1_secure_through_http2(t *testing.T) {
 	t.Parallel()
 
 	server := newHTTPServer()
@@ -510,6 +612,47 @@ func TestProxyServer_can_proxy_http2_through_http2(t *testing.T) {
 	proxyCert := testutil.MustIssueCertificate(t, pkix.Name{CommonName: "mitm-go.org"}, l.Addr())
 	handler := mitmHttp.NewRoundTripHandler(func(r *http.Request) http.RoundTripper {
 		assert.Equalf(t, r.Proto, "HTTP/2.0", "unexpected protocol version")
+
+		return &http.Transport{
+			TLSClientConfig: &tls.Config{
+				RootCAs: rootCAs,
+			},
+		}
+	})
+	proxyServer := newHTTPSProxyServer(t,
+		mitmHttp.TLSConfig(&tls.Config{Certificates: []tls.Certificate{*proxyCert}}), // use HTTP/2 CONNECT
+		mitmHttp.Handler(handler))
+	defer proxyServer.Close()
+
+	go func() {
+		proxyServer.ServeTLS(l, "", "")
+	}()
+
+	proxyURL, err := url.Parse(fmt.Sprintf("https://%s", l.Addr().String()))
+	require.NoError(t, err)
+
+	runHTTP2ProxyTests(t, server, proxyURL, "HTTP/1.1")
+}
+
+func TestProxyServer_can_proxy_http2_through_http2(t *testing.T) {
+	t.Parallel()
+
+	server := newHTTPServer()
+	cert := testutil.MustIssueCertificate(t, pkix.Name{}, server.Listener.Addr())
+	server.TLS = &tls.Config{
+		Certificates: []tls.Certificate{*cert},
+		NextProtos:   []string{"h2", "http/1.1"},
+	}
+	server.StartTLS()
+	defer server.Close()
+
+	l := testutil.NewTCPListener(t)
+	defer l.Close()
+
+	rootCAs := testutil.RootCAs(t)
+	proxyCert := testutil.MustIssueCertificate(t, pkix.Name{CommonName: "mitm-go.org"}, l.Addr())
+	handler := mitmHttp.NewRoundTripHandler(func(r *http.Request) http.RoundTripper {
+		assert.Equalf(t, "HTTP/2.0", r.Proto, "unexpected protocol version")
 
 		return &http2.Transport{
 			TLSClientConfig: &tls.Config{
@@ -530,101 +673,5 @@ func TestProxyServer_can_proxy_http2_through_http2(t *testing.T) {
 	proxyURL, err := url.Parse(fmt.Sprintf("https://%s", l.Addr().String()))
 	require.NoError(t, err)
 
-	rootCACertFile := createTempCertPEM(t, testutil.RootCACert(t), "rootCA.pem")
-	defer os.Remove(rootCACertFile.Name())
-
-	mitmCACertFile := createTempCertPEM(t, testutil.MITMCACert(t), "mitmCA.pem")
-	defer os.Remove(mitmCACertFile.Name())
-
-	cases := []struct {
-		name   string
-		method string
-		path   string
-		body   string
-		status int
-	}{
-		{
-			name:   "GET / (OK)",
-			method: http.MethodGet,
-			path:   "/",
-			status: http.StatusOK,
-		},
-		{
-			name:   "HEAD / (OK)",
-			method: http.MethodHead,
-			path:   "/foo",
-			status: http.StatusOK,
-		},
-		{
-			name:   "POST /foo/1 (Created)",
-			method: http.MethodPost,
-			path:   "/foo/1",
-			body:   "hello",
-			status: http.StatusCreated,
-		},
-		{
-			name:   "PUT /foo/2 (Not Found)",
-			method: http.MethodPut,
-			path:   "/foo/2",
-			body:   "world",
-			status: http.StatusBadRequest,
-		},
-		{
-			name:   "PATCH /foo/1 (Method Not Allowed)",
-			method: http.MethodPatch,
-			path:   "/foo/1",
-			body:   "world",
-			status: http.StatusMethodNotAllowed,
-		},
-		{
-			name:   "DELETE /foo/bar (Internal Server Error)",
-			method: http.MethodDelete,
-			path:   "/foo/bar",
-			status: http.StatusInternalServerError,
-		},
-		{
-			name:   "OPTIONS /foo/1 (OK)",
-			method: http.MethodOptions,
-			path:   "/foo/1",
-			status: http.StatusOK,
-		},
-	}
-
-	for _, c := range cases {
-		c := c
-
-		t.Run(c.name, func(t *testing.T) {
-			// TODO: stop using curl
-			url := fmt.Sprintf("https://%s%s?status=%d", server.Listener.Addr(), c.path, c.status)
-			args := make([]string, 0)
-			if c.method == http.MethodHead {
-				args = append(args, "--head")
-			} else {
-				args = append(args, "-X", c.method, "-d", c.body)
-			}
-			args = append(args,
-				"-s", "--proxy-cacert", rootCACertFile.Name(), "--proxy-http2", "-x", proxyURL.String(),
-				"--cacert", mitmCACertFile.Name(), "--http2", url)
-
-			curl := exec.Command("curl", args...)
-			bs, err := curl.CombinedOutput()
-			require.NoErrorf(t, err, "failed to execute curl")
-
-			if c.method == http.MethodHead {
-				return // no body
-			}
-
-			// the request that the true server received
-			var serverReq request
-			require.NoErrorf(t, json.NewDecoder(bytes.NewBuffer(bs)).Decode(&serverReq), "failed to decode the response body")
-
-			assert.Equal(t, c.method, serverReq.Method, "unexpected method")
-			assert.Equal(t, fmt.Sprintf("%s?status=%d", c.path, c.status), serverReq.URL, "unexpected url")
-			assert.Equal(t, "HTTP/2.0", serverReq.Proto, "unexpected protocol version")
-
-			body, err := io.ReadAll(serverReq.Body)
-			require.NoError(t, err)
-			assert.Equal(t, c.body, string(body))
-		})
-	}
+	runHTTP2ProxyTests(t, server, proxyURL, "HTTP/2.0")
 }
