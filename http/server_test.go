@@ -241,7 +241,7 @@ func TestProxyServer_can_proxy_http1_through_https(t *testing.T) {
 	rootCAs := testutil.RootCAs(t)
 	proxyCert := testutil.MustIssueCertificate(t, pkix.Name{CommonName: "mitm-go.org"}, l.Addr())
 	handler := mitmHttp.NewRoundTripHandler(func(r *http.Request) http.RoundTripper {
-		assert.Equalf(t, r.Proto, "HTTP/1.1", "unexpected protocol version")
+		assert.Equalf(t, "HTTP/1.1", r.Proto, "unexpected protocol version")
 		assert.NotNilf(t, r.TLS, "unexpected non-TLS connection")
 
 		return &http.Transport{
@@ -291,7 +291,7 @@ func TestProxyServer_can_proxy_http1_secure_through_http(t *testing.T) {
 
 	rootCAs := testutil.RootCAs(t)
 	handler := mitmHttp.NewRoundTripHandler(func(r *http.Request) http.RoundTripper {
-		assert.Equalf(t, r.Proto, "HTTP/1.1", "unexpected protocol version")
+		assert.Equalf(t, "HTTP/1.1", r.Proto, "unexpected protocol version")
 		assert.NotNilf(t, r.TLS, "unexpected non-TLS connection")
 
 		return &http.Transport{
@@ -340,7 +340,7 @@ func TestProxyServer_can_proxy_http1_secure_through_https(t *testing.T) {
 	rootCAs := testutil.RootCAs(t)
 	proxyCert := testutil.MustIssueCertificate(t, pkix.Name{CommonName: "mitm-go.org"}, l.Addr())
 	handler := mitmHttp.NewRoundTripHandler(func(r *http.Request) http.RoundTripper {
-		assert.Equalf(t, r.Proto, "HTTP/1.1", "unexpected protocol version")
+		assert.Equalf(t, "HTTP/1.1", r.Proto, "unexpected protocol version")
 
 		return &http.Transport{
 			TLSClientConfig: &tls.Config{
@@ -389,7 +389,7 @@ func TestProxyServer_can_proxy_http2_through_http(t *testing.T) {
 
 	rootCAs := testutil.RootCAs(t)
 	handler := mitmHttp.NewRoundTripHandler(func(r *http.Request) http.RoundTripper {
-		assert.Equalf(t, r.Proto, "HTTP/2.0", "unexpected protocol version")
+		assert.Equalf(t, "HTTP/2.0", r.Proto, "unexpected protocol version")
 
 		return &http2.Transport{
 			TLSClientConfig: &tls.Config{
@@ -439,7 +439,7 @@ func TestProxyServer_can_proxy_http2_through_https(t *testing.T) {
 	rootCAs := testutil.RootCAs(t)
 	proxyCert := testutil.MustIssueCertificate(t, pkix.Name{CommonName: "mitm-go.org"}, l.Addr())
 	handler := mitmHttp.NewRoundTripHandler(func(r *http.Request) http.RoundTripper {
-		assert.Equalf(t, r.Proto, "HTTP/2.0", "unexpected protocol version")
+		assert.Equalf(t, "HTTP/2.0", r.Proto, "unexpected protocol version")
 
 		return &http2.Transport{
 			TLSClientConfig: &tls.Config{
@@ -611,7 +611,7 @@ func TestProxyServer_can_proxy_http1_secure_through_http2(t *testing.T) {
 	rootCAs := testutil.RootCAs(t)
 	proxyCert := testutil.MustIssueCertificate(t, pkix.Name{CommonName: "mitm-go.org"}, l.Addr())
 	handler := mitmHttp.NewRoundTripHandler(func(r *http.Request) http.RoundTripper {
-		assert.Equalf(t, r.Proto, "HTTP/2.0", "unexpected protocol version")
+		assert.Equalf(t, "HTTP/1.1", r.Proto, "unexpected protocol version")
 
 		return &http.Transport{
 			TLSClientConfig: &tls.Config{
