@@ -104,67 +104,69 @@ func serializeRequest(w io.Writer, r *http.Request) {
 	json.NewEncoder(w).Encode(req)
 }
 
-func runHTTPTests(t *testing.T, server *httptest.Server, client *http.Client, proto string) {
+type httpTestCase struct {
+	name   string
+	method string
+	path   string
+	body   string
+	status int
+}
+
+var httpTestCases = []httpTestCase{
+	{
+		name:   "GET / (OK)",
+		method: http.MethodGet,
+		path:   "/",
+		status: http.StatusOK,
+	},
+	{
+		name:   "HEAD / (OK)",
+		method: http.MethodHead,
+		path:   "/foo",
+		status: http.StatusOK,
+	},
+	{
+		name:   "POST /foo/1 (Created)",
+		method: http.MethodPost,
+		path:   "/foo/1",
+		body:   "hello",
+		status: http.StatusCreated,
+	},
+	{
+		name:   "PUT /foo/2 (Not Found)",
+		method: http.MethodPut,
+		path:   "/foo/2",
+		body:   "world",
+		status: http.StatusBadRequest,
+	},
+	{
+		name:   "PATCH /foo/1 (Method Not Allowed)",
+		method: http.MethodPatch,
+		path:   "/foo/1",
+		body:   "world",
+		status: http.StatusMethodNotAllowed,
+	},
+	{
+		name:   "DELETE /foo/bar (Internal Server Error)",
+		method: http.MethodDelete,
+		path:   "/foo/bar",
+		status: http.StatusInternalServerError,
+	},
+	{
+		name:   "OPTIONS /foo/1 (OK)",
+		method: http.MethodOptions,
+		path:   "/foo/1",
+		status: http.StatusOK,
+	},
+}
+
+func runHTTP1ProxyTests(t *testing.T, server *httptest.Server, client *http.Client, proto string) {
 	scheme := "http"
 	if server.TLS != nil {
 		scheme = "https"
 	}
 
-	cases := []struct {
-		name   string
-		method string
-		path   string
-		body   string
-		status int
-	}{
-		{
-			name:   "GET / (OK)",
-			method: http.MethodGet,
-			path:   "/",
-			status: http.StatusOK,
-		},
-		{
-			name:   "HEAD / (OK)",
-			method: http.MethodHead,
-			path:   "/foo",
-			status: http.StatusOK,
-		},
-		{
-			name:   "POST /foo/1 (Created)",
-			method: http.MethodPost,
-			path:   "/foo/1",
-			body:   "hello",
-			status: http.StatusCreated,
-		},
-		{
-			name:   "PUT /foo/2 (Not Found)",
-			method: http.MethodPut,
-			path:   "/foo/2",
-			body:   "world",
-			status: http.StatusBadRequest,
-		},
-		{
-			name:   "PATCH /foo/1 (Method Not Allowed)",
-			method: http.MethodPatch,
-			path:   "/foo/1",
-			body:   "world",
-			status: http.StatusMethodNotAllowed,
-		},
-		{
-			name:   "DELETE /foo/bar (Internal Server Error)",
-			method: http.MethodDelete,
-			path:   "/foo/bar",
-			status: http.StatusInternalServerError,
-		},
-		{
-			name:   "OPTIONS /foo/1 (OK)",
-			method: http.MethodOptions,
-			path:   "/foo/1",
-			status: http.StatusOK,
-		},
-	}
-
-	for _, c := range cases {
+	for _, c := range httpTestCases {
 		c := c
 
 		t.Run(c.name, func(t *testing.T) {
@@ -223,7 +225,7 @@ func TestProxyServer_can_proxy_http1_through_http(t *testing.T) {
 		},
 	}
 
-	runHTTPTests(t, server, client, "HTTP/1.1")
+	runHTTP1ProxyTests(t, server, client, "HTTP/1.1")
 }
 
 func TestProxyServer_can_proxy_http1_through_https(t *testing.T) {
@@ -269,7 +271,7 @@ func TestProxyServer_can_proxy_http1_through_https(t *testing.T) {
 		},
 	}
 
-	runHTTPTests(t, server, client, "HTTP/1.1")
+	runHTTP1ProxyTests(t, server, client, "HTTP/1.1")
 }
 
 func TestProxyServer_can_proxy_http1_secure_through_http(t *testing.T) {
@@ -317,7 +319,7 @@ func TestProxyServer_can_proxy_http1_secure_through_http(t *testing.T) {
 		},
 	}
 
-	runHTTPTests(t, server, client, "HTTP/1.1")
+	runHTTP1ProxyTests(t, server, client, "HTTP/1.1")
 }
 
 func TestProxyServer_can_proxy_http1_secure_through_https(t *testing.T) {
@@ -367,7 +369,7 @@ func TestProxyServer_can_proxy_http1_secure_through_https(t *testing.T) {
 		},
 	}
 
-	runHTTPTests(t, server, client, "HTTP/1.1")
+	runHTTP1ProxyTests(t, server, client, "HTTP/1.1")
 }
 
 func TestProxyServer_can_proxy_http2_through_http(t *testing.T) {
@@ -416,7 +418,7 @@ func TestProxyServer_can_proxy_http2_through_http(t *testing.T) {
 		},
 	}
 
-	runHTTPTests(t, server, client, "HTTP/2.0")
+	runHTTP1ProxyTests(t, server, client, "HTTP/2.0")
 }
 
 func TestProxyServer_can_proxy_http2_through_https(t *testing.T) {
@@ -468,7 +470,7 @@ func TestProxyServer_can_proxy_http2_through_https(t *testing.T) {
 		},
 	}
 
-	runHTTPTests(t, server, client, "HTTP/2.0")
+	runHTTP1ProxyTests(t, server, client, "HTTP/2.0")
 }
 
 func createTempCertPEM(t *testing.T, cert *tls.Certificate, name string) *os.File {
