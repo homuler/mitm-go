@@ -241,8 +241,8 @@ type TProxyServer struct {
 	config *mitm.TLSConfig
 }
 
-func tproxyConnContext(ctx context.Context, c net.Conn) context.Context {
-	return WithDestination(ctx, c.LocalAddr())
+func nopConnContext(ctx context.Context, c net.Conn) context.Context {
+	return ctx
 }
 
 func NewTProxyServer(config *mitm.TLSConfig, options ...ProxyServerOption) TProxyServer {
@@ -255,25 +255,26 @@ func NewTProxyServer(config *mitm.TLSConfig, options ...ProxyServerOption) TProx
 		opt(psrv)
 	}
 
-	if psrv.Server.ConnContext == nil {
-		psrv.Server.ConnContext = tproxyConnContext
-	} else {
-		connContext := psrv.Server.ConnContext
-		psrv.Server.ConnContext = func(ctx context.Context, c net.Conn) context.Context {
-			return connContext(tproxyConnContext(ctx, c), c)
-		}
-	}
-	psrv.Server.Handler = &tproxyHandler{handler: psrv.Server.Handler}
-
 	config = config.Clone()
 	if config.NextProtos == nil {
 		config.NextProtos = []string{"h2", "http/1.1"}
 	}
-	if config.GetDestination == nil {
-		config.GetDestination = func(conn net.Conn, serverName string) net.Addr {
-			return conn.LocalAddr()
-		}
+
+	if psrv.Server.ConnContext == nil {
+		psrv.Server.ConnContext = nopConnContext
 	}
+
+	getDest := config.GetDestination
+	connCtx := psrv.Server.ConnContext
+
+	psrv.Server.ConnContext = func(ctx context.Context, c net.Conn) context.Context {
+		if pc, ok := c.(*mitm.ProxyConn); ok {
+			return connCtx(WithDestination(ctx, pc.Destination()), pc)
+		}
+		// non-TLS connection
+		return connCtx(WithDestination(ctx, getDest(c, "")), c)
+	}
+	psrv.Server.Handler = &tproxyHandler{handler: psrv.Server.Handler}
 
 	return TProxyServer{proxyServer: psrv, config: config}
 }
