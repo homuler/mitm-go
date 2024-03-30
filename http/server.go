@@ -279,8 +279,18 @@ func NewTProxyServer(config *mitm.TLSConfig, options ...ProxyServerOption) TProx
 	return TProxyServer{proxyServer: psrv, config: config}
 }
 
-func (psrv TProxyServer) ServeTLS(l net.Listener) error {
-	tl, err := mitm.NewTLSListener(l, psrv.config)
+func (psrv TProxyServer) ServeTLS(l net.Listener, certFile, keyFile string) error {
+	config := psrv.config.Clone()
+
+	if config.RootCertificate == nil || certFile != "" || keyFile != "" {
+		cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+		if err != nil {
+			return err
+		}
+		config.RootCertificate = &cert
+	}
+
+	tl, err := mitm.NewTLSListener(l, config)
 	if err != nil {
 		return err
 	}

@@ -644,7 +644,7 @@ func TestTProxyServer_can_proxy_https(t *testing.T) {
 	defer proxyServer.Close()
 
 	go func() {
-		proxyServer.ServeTLS(l)
+		proxyServer.ServeTLS(l, "", "")
 	}()
 
 	for _, c := range httpTestCases {
@@ -693,7 +693,7 @@ func TestTProxyServer_can_proxy_http2(t *testing.T) {
 	defer proxyServer.Close()
 
 	go func() {
-		proxyServer.ServeTLS(l)
+		proxyServer.ServeTLS(l, "", "")
 	}()
 
 	for _, c := range httpTestCases {

@@ -48,7 +48,7 @@ func main() {
 	}()
 
 	go func() {
-		errCh <- mitmHttpsServer.ServeTLS(httpsLn)
+		errCh <- mitmHttpsServer.ServeTLS(httpsLn, "", "")
 	}()
 
 	go func() {
