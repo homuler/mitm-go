@@ -31,6 +31,18 @@ type serverInfo struct {
 	protocols supportedProtocolMap // TODO: clear it periodically
 }
 
+func (si *serverInfo) updateProtocols(state *tls.ConnectionState, nextProtos []string) {
+	negotiatedProtocol := state.NegotiatedProtocol
+
+	for _, p := range nextProtos {
+		if p == negotiatedProtocol {
+			break
+		}
+		si.protocols[p] = false
+	}
+	si.protocols[negotiatedProtocol] = true
+}
+
 type ServerInfoCache map[string]serverInfo
 
 type TLSConfig struct {
@@ -79,10 +91,10 @@ func (c *TLSConfig) normalize() *TLSConfig {
 	c = c.Clone()
 
 	if c.GetServerConfig == nil {
-		c.GetServerConfig = defaultGetServerConfig
+		c.GetServerConfig = defaultGetTLSServerConfig
 	}
 	if c.GetClientConfig == nil {
-		c.GetClientConfig = defaultGetClientConfig
+		c.GetClientConfig = defaultGetTLSClientConfig
 	}
 	if c.ServerInfoCache == nil {
 		c.ServerInfoCache = make(ServerInfoCache)
@@ -114,7 +126,7 @@ var defaultBufferPool = sync.Pool{
 	},
 }
 
-var defaultGetServerConfig = func(certificate *tls.Certificate, negotiatedProtocol string, err error) *tls.Config {
+var defaultGetTLSServerConfig = func(certificate *tls.Certificate, negotiatedProtocol string, err error) *tls.Config {
 	config := &tls.Config{}
 
 	if err != nil {
@@ -134,7 +146,7 @@ var defaultGetServerConfig = func(certificate *tls.Certificate, negotiatedProtoc
 	return config
 }
 
-var defaultGetClientConfig = func(serverName string, alpnProtocols []string) *tls.Config {
+var defaultGetTLSClientConfig = func(serverName string, alpnProtocols []string) *tls.Config {
 	return &tls.Config{
 		ServerName: serverName,
 		NextProtos: alpnProtocols,
@@ -242,29 +254,20 @@ func (c *tlsConn) handshakeWithServer(dstAddr net.Addr, msg *clientHelloMsg) (*t
 	serverName := msg.serverName
 	alpnProtocols := msg.alpnProtocols
 	if len(c.config.NextProtos) > 0 {
-		ps := c.config.NextProtos
-		alpnProtocols = slices.DeleteFunc(alpnProtocols, func(s string) bool {
-			return !slices.Contains(ps, s)
-		})
+		alpnProtocols = deleteNotIn(alpnProtocols, c.config.NextProtos)
 	}
 
 	serverInfoCache := c.config.ServerInfoCache
-	dstAddrStr := dstAddr.String()
 	key := serverName
 	if key == "" {
-		key = dstAddrStr
+		key = dstAddr.String()
 	}
 
-	si, ok := c.config.ServerInfoCache[key]
+	si, ok := serverInfoCache[key]
 	if ok {
-		protocol, ok := si.protocols.getFirst(alpnProtocols)
-		if ok || (protocol == "" && len(alpnProtocols) == 0) {
-			// skip handshake & negotiation
-			return si.certificate, protocol, nil
-		}
-		if protocol == "" {
-			// the server does not support any of alpnProtocols
-			return si.certificate, "", fmt.Errorf("%w (serverName=%s, addr=%s)", ErrNoApplicationProtocol, serverName, dstAddr)
+		cert, protocol, err := tryNegotiateWithCache(dstAddr, serverName, alpnProtocols, si)
+		if err != nil || cert != nil {
+			return cert, protocol, err
 		}
 		// we still need to negotiate the protocol
 	} else {
@@ -272,7 +275,7 @@ func (c *tlsConn) handshakeWithServer(dstAddr net.Addr, msg *clientHelloMsg) (*t
 	}
 
 	clientConfig := c.config.GetClientConfig(serverName, alpnProtocols)
-	tc, err := tls.Dial(dstAddr.Network(), dstAddrStr, clientConfig)
+	tc, err := tls.Dial(dstAddr.Network(), dstAddr.String(), clientConfig)
 	if err != nil {
 		return nil, "", fmt.Errorf("%w (serverName=%v, addr=%v): %w", ErrHandshakeWithServer, serverName, dstAddr, err)
 	}
@@ -289,14 +292,8 @@ func (c *tlsConn) handshakeWithServer(dstAddr net.Addr, msg *clientHelloMsg) (*t
 		}
 		si.certificate = &cert
 	}
+	si.updateProtocols(&state, alpnProtocols)
 
-	for _, p := range clientConfig.NextProtos {
-		if p == negotiatedProtocol {
-			break
-		}
-		si.protocols[p] = false
-	}
-	si.protocols[negotiatedProtocol] = true
 	serverInfoCache[key] = si
 
 	return si.certificate, negotiatedProtocol, nil
@@ -325,4 +322,23 @@ func (c *tlsConn) readClientHello(msg *clientHelloMsg) error {
 		return errors.New("invalid ClientHello")
 	}
 	return nil
+}
+
+func deleteNotIn[S ~[]E, E comparable](a, b S) S {
+	return slices.DeleteFunc(a, func(s E) bool {
+		return !slices.Contains(b, s)
+	})
+}
+
+func tryNegotiateWithCache(addr net.Addr, serverName string, alpnProtocols []string, cache serverInfo) (*tls.Certificate, string, error) {
+	protocol, ok := cache.protocols.getFirst(alpnProtocols)
+	if ok || (protocol == "" && len(alpnProtocols) == 0) {
+		// skip handshake & negotiation
+		return cache.certificate, protocol, nil
+	}
+	if protocol == "" {
+		// the server does not support any of alpnProtocols
+		return cache.certificate, "", fmt.Errorf("%w (serverName=%s, addr=%s)", ErrNoApplicationProtocol, serverName, addr)
+	}
+	return nil, "", nil
 }

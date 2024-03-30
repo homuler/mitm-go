@@ -19,9 +19,13 @@ func main() {
 		panic(err)
 	}
 
-	mitmHttpServer := http.NewTProxyServer(&mitm.TLSConfig{RootCertificate: &rootCert})
-	mitmHttpsServer := http.NewTProxyServer(&mitm.TLSConfig{RootCertificate: &rootCert})
-	mitmHttp3Server := http3.NewTProxyServer(rootCert)
+	getDest := func(conn net.Conn, serverName string) net.Addr {
+		return conn.LocalAddr()
+	}
+
+	mitmHttpServer := http.NewTProxyServer(&mitm.TLSConfig{RootCertificate: &rootCert, GetDestination: getDest})
+	mitmHttpsServer := http.NewTProxyServer(&mitm.TLSConfig{RootCertificate: &rootCert, GetDestination: getDest})
+	mitmHttp3Server := http3.NewTProxyServer(&mitm.QUICConfig{RootCertificate: &rootCert, GetDestination: getDest})
 
 	httpLn, err := tproxy.ListenTCP("tcp", &net.TCPAddr{IP: net.ParseIP("0.0.0.0"), Port: 8080})
 	if err != nil {
