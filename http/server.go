@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/homuler/mitm-proxy-go"
+	"github.com/homuler/mitm-go"
 )
 
 type connKey struct{}

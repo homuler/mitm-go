@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/homuler/mitm-proxy-go"
+	"github.com/homuler/mitm-go"
 )
 
 func Example_memorizingReader_Memorized() {

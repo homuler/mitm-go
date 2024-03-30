@@ -1,4 +1,4 @@
-module github.com/homuler/mitm-proxy-go
+module github.com/homuler/mitm-go
 
 go 1.21.0
 

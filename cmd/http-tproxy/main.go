@@ -7,10 +7,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/homuler/mitm-proxy-go"
-	"github.com/homuler/mitm-proxy-go/http"
-	"github.com/homuler/mitm-proxy-go/http3"
-	"github.com/homuler/mitm-proxy-go/tproxy"
+	"github.com/homuler/mitm-go"
+	"github.com/homuler/mitm-go/http"
+	"github.com/homuler/mitm-go/http3"
+	"github.com/homuler/mitm-go/tproxy"
 )
 
 func main() {

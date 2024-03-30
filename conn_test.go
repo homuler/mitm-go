@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/homuler/mitm-proxy-go"
+	"github.com/homuler/mitm-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/net/nettest"

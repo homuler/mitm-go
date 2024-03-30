@@ -19,9 +19,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/homuler/mitm-proxy-go"
-	mitmHttp "github.com/homuler/mitm-proxy-go/http"
-	"github.com/homuler/mitm-proxy-go/internal/testutil"
+	"github.com/homuler/mitm-go"
+	mitmHttp "github.com/homuler/mitm-go/http"
+	"github.com/homuler/mitm-go/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/net/http2"

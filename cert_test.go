@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/homuler/mitm-proxy-go"
-	"github.com/homuler/mitm-proxy-go/internal/testutil"
+	"github.com/homuler/mitm-go"
+	"github.com/homuler/mitm-go/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

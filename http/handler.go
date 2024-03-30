@@ -12,7 +12,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/homuler/mitm-proxy-go"
+	"github.com/homuler/mitm-go"
 	"github.com/quic-go/quic-go/http3"
 	"golang.org/x/net/http2"
 )

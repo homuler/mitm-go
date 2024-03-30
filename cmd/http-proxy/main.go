@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/homuler/mitm-proxy-go"
-	mitmhttp "github.com/homuler/mitm-proxy-go/http"
+	"github.com/homuler/mitm-go"
+	mitmhttp "github.com/homuler/mitm-go/http"
 )
 
 func main() {

@@ -4,7 +4,7 @@ import (
 	"net"
 	"net/url"
 
-	"github.com/homuler/mitm-proxy-go"
+	"github.com/homuler/mitm-go"
 )
 
 func NewURLAddr(network string, u *url.URL) net.Addr {

@@ -8,8 +8,8 @@ import (
 	"net"
 	"net/http"
 
-	"github.com/homuler/mitm-proxy-go"
-	mitmhttp "github.com/homuler/mitm-proxy-go/http"
+	"github.com/homuler/mitm-go"
+	mitmhttp "github.com/homuler/mitm-go/http"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 )
