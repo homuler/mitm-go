@@ -189,6 +189,12 @@ type tlsConn struct {
 	config *TLSConfig
 }
 
+// NewTLSServer returns a new TLS server connection.
+// Unlike tls.Server, this will use a forged certificate to handle the connection as follows:
+//
+//  1. Peek the ClientHello message from the connection.
+//  2. Sniff the certificate of the upstream server.
+//  3. Forge a certificate and returns tls.Server, which will reread the message from the beginning.
 func NewTLSServer(conn net.Conn, config *TLSConfig) (*tls.Conn, error) {
 	if err := config.validate(); err != nil {
 		return nil, err
@@ -197,8 +203,6 @@ func NewTLSServer(conn net.Conn, config *TLSConfig) (*tls.Conn, error) {
 	return tlsServer(conn, config.normalize()), nil
 }
 
-// tlsServer returns a TLS server connection and the error that occurred while forging a certificate if any.
-// tls.Conn is always returned even if an error occurred.
 func tlsServer(conn net.Conn, config *TLSConfig) *tls.Conn {
 	bufPtr := defaultBufferPool.Get().(*[]byte)
 	tlsConn := newTlsConn(conn, config, (*bufPtr)[0:0])
@@ -248,7 +252,6 @@ func newTlsConn(conn net.Conn, config *TLSConfig, buffer []byte) *tlsConn {
 }
 
 // handshakeWithServer returns a certificate of the server and the negotiated protocol.
-// serverInfoCache will be updated with the result.
 // Note that even if the error in the return value is not nil, other return values may not be zero values.
 func (c *tlsConn) handshakeWithServer(dstAddr net.Addr, msg *clientHelloMsg) (*tls.Certificate, string, error) {
 	serverName := msg.serverName
