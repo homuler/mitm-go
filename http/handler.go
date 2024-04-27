@@ -42,7 +42,7 @@ func (h *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The request is HTTP or the proxy is transparent.
+	// The request is HTTP
 	h.handler.ServeHTTP(w, normalizeHTTPRequest(r))
 }
 
