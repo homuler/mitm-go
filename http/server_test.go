@@ -414,7 +414,6 @@ func runHTTP2ProxyTests(t *testing.T, server *httptest.Server, proxyURL *url.URL
 			// TODO: stop using curl
 			args := buildCurlArgs(c)
 			curl := exec.Command("curl", args...)
-			curl.Env = append(curl.Env, "SSLKEYLOGFILE=/home/homuler/sslkeylogfile.txt")
 			bs, err := curl.CombinedOutput()
 			require.NoErrorf(t, err, "failed to execute curl")
 
