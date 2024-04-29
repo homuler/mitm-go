@@ -290,6 +290,13 @@ func TestNewTLSListner_supports_ALPN(t *testing.T) {
 			serverNextProtos: []string{"a", "b"},
 			expectedProto:    "",
 		},
+		{
+			name:             "server does not support ALPN",
+			serverNextProtos: nil,
+			mitmNextProtos:   []string{"a", "b"},
+			clientNextProtos: []string{"a", "b"},
+			expectedProto:    "",
+		},
 	}
 
 	for _, c := range cases {
