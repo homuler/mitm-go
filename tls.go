@@ -7,40 +7,35 @@ import (
 	"io"
 	"net"
 	"slices"
+	"strings"
 	"sync"
 )
 
-type supportedProtocolMap map[string]bool
+type alpnCache map[string]string
 
-func (m supportedProtocolMap) getFirst(protos []string) (string, bool) {
-	for _, p := range protos {
-		supported, ok := m[p]
-		if supported {
-			return p, true
-		}
-		if !ok {
-			return p, false
-		}
-	}
-	return "", false
+func (c alpnCache) key(nextProtos []string) string {
+	return strings.Join(nextProtos, "\x00")
+}
+
+func (c alpnCache) get(nextProtos []string) (string, bool) {
+	key := c.key(nextProtos)
+	protocol, ok := c[key]
+	return protocol, ok
+}
+
+func (c alpnCache) set(nextProtos []string, protocol string) {
+	key := c.key(nextProtos)
+	c[key] = protocol
 }
 
 type serverInfo struct {
 	certificate *tls.Certificate
 
-	protocols supportedProtocolMap // TODO: clear it periodically
+	alpnCache alpnCache // TODO: clear it periodically
 }
 
-func (si *serverInfo) updateProtocols(state *tls.ConnectionState, nextProtos []string) {
-	negotiatedProtocol := state.NegotiatedProtocol
-
-	for _, p := range nextProtos {
-		if p == negotiatedProtocol {
-			break
-		}
-		si.protocols[p] = false
-	}
-	si.protocols[negotiatedProtocol] = true
+func (si *serverInfo) cacheALPNResult(state *tls.ConnectionState, alpnProtocols []string) {
+	si.alpnCache.set(alpnProtocols, state.NegotiatedProtocol)
 }
 
 type ServerInfoCache map[string]serverInfo
@@ -136,8 +131,10 @@ var defaultGetTLSServerConfig = func(certificate *tls.Certificate, negotiatedPro
 		return config
 	}
 
-	// if negotiatedProtocol is empty(""), the handshake will succeed only if the client does not support ALPN.
-	config.NextProtos = []string{negotiatedProtocol}
+	// if negotiatedProtocol is empty(""), the true server may not support ALPN, so we should not specify NextProtos.
+	if negotiatedProtocol != "" {
+		config.NextProtos = []string{negotiatedProtocol}
+	}
 
 	if certificate != nil {
 		config.Certificates = []tls.Certificate{*certificate}
@@ -178,8 +175,7 @@ func (tl *tlsListener) Close() error   { return tl.listener.Close() }
 func (tl *tlsListener) Addr() net.Addr { return tl.listener.Addr() }
 
 var (
-	ErrHandshakeWithServer   = errors.New("mitm: upstream certificate sniffing failed")
-	ErrNoApplicationProtocol = errors.New("mitm: no application protocol")
+	ErrHandshakeWithServer = errors.New("mitm: upstream certificate sniffing failed")
 )
 
 type tlsConn struct {
@@ -268,13 +264,14 @@ func (c *tlsConn) handshakeWithServer(dstAddr net.Addr, msg *clientHelloMsg) (*t
 
 	si, ok := serverInfoCache[key]
 	if ok {
-		cert, protocol, err := tryNegotiateWithCache(dstAddr, serverName, alpnProtocols, si)
-		if err != nil || cert != nil {
-			return cert, protocol, err
+		protocol, ok := si.alpnCache.get(alpnProtocols)
+		if ok {
+			// skip handshake & negotiation if succeeded once
+			return si.certificate, protocol, nil
 		}
 		// we still need to negotiate the protocol
 	} else {
-		si = serverInfo{protocols: make(supportedProtocolMap)}
+		si = serverInfo{alpnCache: make(alpnCache)}
 	}
 
 	clientConfig := c.config.GetClientConfig(serverName, alpnProtocols)
@@ -295,8 +292,7 @@ func (c *tlsConn) handshakeWithServer(dstAddr net.Addr, msg *clientHelloMsg) (*t
 		}
 		si.certificate = &cert
 	}
-	si.updateProtocols(&state, alpnProtocols)
-
+	si.cacheALPNResult(&state, alpnProtocols)
 	serverInfoCache[key] = si
 
 	return si.certificate, negotiatedProtocol, nil
@@ -331,17 +327,4 @@ func deleteNotIn[S ~[]E, E comparable](a, b S) S {
 	return slices.DeleteFunc(a, func(s E) bool {
 		return !slices.Contains(b, s)
 	})
-}
-
-func tryNegotiateWithCache(addr net.Addr, serverName string, alpnProtocols []string, cache serverInfo) (*tls.Certificate, string, error) {
-	protocol, ok := cache.protocols.getFirst(alpnProtocols)
-	if ok || (protocol == "" && len(alpnProtocols) == 0) {
-		// skip handshake & negotiation
-		return cache.certificate, protocol, nil
-	}
-	if protocol == "" {
-		// the server does not support any of alpnProtocols
-		return cache.certificate, "", fmt.Errorf("%w (serverName=%s, addr=%s)", ErrNoApplicationProtocol, serverName, addr)
-	}
-	return nil, "", nil
 }

@@ -143,24 +143,22 @@ func NewQUICListener(conn net.PacketConn, config *QUICConfig) (*quicListener, er
 
 		si, ok := serverInfoCache[key]
 		if ok {
-			cert, _, err := tryNegotiateWithCache(addr, serverName, alpnProtocols, si)
-			if err != nil || cert != nil {
-				return cert, err
+			_, ok := si.alpnCache.get(alpnProtocols)
+			if ok {
+				// skip handshake & negotiation if succeeded once
+				return si.certificate, nil
 			}
 			// we still need to negotiate the protocol
 		} else {
-			si = serverInfo{protocols: make(supportedProtocolMap)}
+			si = serverInfo{alpnCache: make(alpnCache)}
 		}
 
 		tlsConfig := config.GetTLSClientConfig(serverName, alpnProtocols)
 
-		fmt.Printf("alpn: %v\n", alpnProtocols)
 		proxyConn, err := quic.DialAddr(context.Background(), addr.String(), tlsConfig, quicClientConf)
 		if err != nil {
-			fmt.Printf("err: %v\n", err)
 			return nil, fmt.Errorf("%w (serverName=%v, addr=%v): %w", ErrHandshakeWithServer, serverName, addr, err)
 		}
-		fmt.Println("hello")
 
 		state := proxyConn.ConnectionState().TLS
 
@@ -172,7 +170,7 @@ func NewQUICListener(conn net.PacketConn, config *QUICConfig) (*quicListener, er
 			}
 			si.certificate = &cert
 		}
-		si.updateProtocols(&state, alpnProtocols)
+		si.cacheALPNResult(&state, alpnProtocols)
 
 		serverInfoCache[key] = si
 

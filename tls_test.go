@@ -420,8 +420,13 @@ func TestNewTLSListner_can_serve_different_protocols(t *testing.T) {
 			expectedProto: "",
 		},
 		{
-			name:          "client and server agree on the 1st protocol",
+			name:          "client and server supports the same protocols",
 			nextProtos:    []string{"a", "b"},
+			expectedProto: "a",
+		},
+		{
+			name:          "client and server supports the same protocols but the preference is different",
+			nextProtos:    []string{"b", "a"},
 			expectedProto: "a",
 		},
 		{
@@ -430,19 +435,20 @@ func TestNewTLSListner_can_serve_different_protocols(t *testing.T) {
 			expectedProto: "b",
 		},
 		{
-			name:          "MITM server knows the server supports the 1st protocol",
-			nextProtos:    []string{"a", "c"},
-			expectedProto: "a",
-		},
-		{
-			name:          "MITM server knows the server supports the 2nd protocol",
-			nextProtos:    []string{"c", "a"},
-			expectedProto: "a",
-		},
-		{
-			name:       "MITM server knows the server doesn't support all the requested protocols",
+			name:       "client and server fail to agree on the protocol",
 			nextProtos: []string{"c"},
-			mitmErr:    mitm.ErrNoApplicationProtocol.Error(),
+			mitmErr:    mitm.ErrHandshakeWithServer.Error(),
+			clientErr:  "remote error: tls: internal error",
+		},
+		{
+			name:          "client have requested the same nextProtos once (ok)",
+			nextProtos:    []string{"c", "b"},
+			expectedProto: "b",
+		},
+		{
+			name:       "client have requested the same naxtProtos once (error)",
+			nextProtos: []string{"c"},
+			mitmErr:    mitm.ErrHandshakeWithServer.Error(),
 			clientErr:  "remote error: tls: internal error",
 		},
 	}
