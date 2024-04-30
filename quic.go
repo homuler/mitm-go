@@ -67,7 +67,7 @@ func (c *QUICConfig) normalize() *QUICConfig {
 		c.TLSServerConfig = &tls.Config{}
 	}
 	if c.GetTLSClientConfig == nil {
-		c.GetTLSClientConfig = defaultGetTLSClientConfig
+		c.GetTLSClientConfig = DefaultGetTLSClientConfig
 	}
 	if c.ServerInfoCache == nil {
 		c.ServerInfoCache = make(ServerInfoCache)

@@ -86,10 +86,10 @@ func (c *TLSConfig) normalize() *TLSConfig {
 	c = c.Clone()
 
 	if c.GetServerConfig == nil {
-		c.GetServerConfig = defaultGetTLSServerConfig
+		c.GetServerConfig = DefaultGetTLSServerConfig
 	}
 	if c.GetClientConfig == nil {
-		c.GetClientConfig = defaultGetTLSClientConfig
+		c.GetClientConfig = DefaultGetTLSClientConfig
 	}
 	if c.ServerInfoCache == nil {
 		c.ServerInfoCache = make(ServerInfoCache)
@@ -121,7 +121,7 @@ var defaultBufferPool = sync.Pool{
 	},
 }
 
-var defaultGetTLSServerConfig = func(certificate *tls.Certificate, negotiatedProtocol string, err error) *tls.Config {
+var DefaultGetTLSServerConfig = func(certificate *tls.Certificate, negotiatedProtocol string, err error) *tls.Config {
 	config := &tls.Config{}
 
 	if err != nil {
@@ -143,7 +143,7 @@ var defaultGetTLSServerConfig = func(certificate *tls.Certificate, negotiatedPro
 	return config
 }
 
-var defaultGetTLSClientConfig = func(serverName string, alpnProtocols []string) *tls.Config {
+var DefaultGetTLSClientConfig = func(serverName string, alpnProtocols []string) *tls.Config {
 	return &tls.Config{
 		ServerName: serverName,
 		NextProtos: alpnProtocols,
