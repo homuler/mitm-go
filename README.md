@@ -17,7 +17,7 @@ if err != nil {
 defer l.Close()
 
 for {
-	conn, err := l.Accept()
+  conn, err := l.Accept()
   if err != nil {
     break
   }
@@ -62,7 +62,7 @@ if err != nil {
 defer l.Close()
 
 for {
-	conn, err := l.Accept()
+  conn, err := l.Accept()
   if err != nil {
     break
   }
