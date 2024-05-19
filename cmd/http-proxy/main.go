@@ -8,6 +8,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"flag"
 	"fmt"
 	"net"
 	"sync"
@@ -17,8 +19,22 @@ import (
 	mitmhttp "github.com/homuler/mitm-go/http"
 )
 
+var (
+	rootCACertPath = flag.String("rootCACert", "", "Root CA certificate file path")
+	rootCAKeyPath  = flag.String("rootCAKey", "", "Root CA key file path")
+)
+
 func main() {
-	rootCert, err := mitm.LoadCertificate("rootCACert.pem", "rootCAKey.pem")
+	flag.Parse()
+
+	if *rootCACertPath == "" {
+		panic(errors.New("rootCACert is required"))
+	}
+	if *rootCAKeyPath == "" {
+		panic(errors.New("rootCAKey is required"))
+	}
+
+	rootCert, err := mitm.LoadCertificate(*rootCACertPath, *rootCAKeyPath)
 	if err != nil {
 		panic(err)
 	}
