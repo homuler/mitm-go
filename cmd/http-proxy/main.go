@@ -8,10 +8,12 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
 	"net"
+	"os"
 	"sync"
 	"time"
 
@@ -39,8 +41,29 @@ func main() {
 		panic(err)
 	}
 
-	mitmHttpServer := mitmhttp.NewProxyServer(&mitm.TLSConfig{RootCertificate: &rootCert})
-	mitmHttpsServer := mitmhttp.NewProxyServer(&mitm.TLSConfig{RootCertificate: &rootCert})
+	getTLSServerConfig := mitm.DefaultGetTLSServerConfig
+
+	sslKeyLogFile := os.Getenv("SSLKEYLOGFILE")
+	if sslKeyLogFile != "" {
+		w, err := os.OpenFile(sslKeyLogFile, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0600)
+		if err != nil {
+			panic(err)
+		}
+
+		getTLSServerConfig = func(certificate *tls.Certificate, negotiatedProtocol string, err error) *tls.Config {
+			c := mitm.DefaultGetTLSServerConfig(certificate, negotiatedProtocol, err)
+			c.KeyLogWriter = w
+			return c
+		}
+	}
+
+	tlsConfig := mitm.TLSConfig{
+		RootCertificate: &rootCert,
+		GetServerConfig: getTLSServerConfig,
+	}
+
+	mitmHttpServer := mitmhttp.NewProxyServer(&tlsConfig)
+	mitmHttpsServer := mitmhttp.NewProxyServer(&tlsConfig)
 
 	httpLn, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.ParseIP("0.0.0.0"), Port: 8080})
 	if err != nil {

@@ -10,10 +10,12 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
 	"net"
+	"os"
 	"sync"
 	"time"
 
@@ -46,8 +48,30 @@ func main() {
 		return conn.LocalAddr()
 	}
 
-	mitmHttpServer := http.NewTProxyServer(&mitm.TLSConfig{RootCertificate: &rootCert, GetDestination: getDest})
-	mitmHttpsServer := http.NewTProxyServer(&mitm.TLSConfig{RootCertificate: &rootCert, GetDestination: getDest})
+	getTLSServerConfig := mitm.DefaultGetTLSServerConfig
+
+	sslKeyLogFile := os.Getenv("SSLKEYLOGFILE")
+	if sslKeyLogFile != "" {
+		w, err := os.OpenFile(sslKeyLogFile, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0600)
+		if err != nil {
+			panic(err)
+		}
+
+		getTLSServerConfig = func(certificate *tls.Certificate, negotiatedProtocol string, err error) *tls.Config {
+			c := mitm.DefaultGetTLSServerConfig(certificate, negotiatedProtocol, err)
+			c.KeyLogWriter = w
+			return c
+		}
+	}
+
+	tlsConfig := mitm.TLSConfig{
+		RootCertificate: &rootCert,
+		GetDestination:  getDest,
+		GetServerConfig: getTLSServerConfig,
+	}
+
+	mitmHttpServer := http.NewTProxyServer(&tlsConfig)
+	mitmHttpsServer := http.NewTProxyServer(&tlsConfig)
 	mitmHttp3Server := http3.NewTProxyServer(&mitm.QUICConfig{RootCertificate: &rootCert, GetDestination: getDest})
 
 	httpLn, err := mitm.ListenTCPTProxy("tcp", &net.TCPAddr{IP: net.ParseIP("0.0.0.0"), Port: 8080})
