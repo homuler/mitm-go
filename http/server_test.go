@@ -550,10 +550,10 @@ func assertHTTPRequest(t *testing.T, c httpTestCase, conn net.Conn, server *http
 	require.NoError(t, err, "failed to read the response")
 	defer resp.Body.Close()
 
-	assertHTTPResponse(t, c, conn, proto, resp)
+	assertHTTPResponse(t, c, proto, resp)
 }
 
-func assertHTTPResponse(t *testing.T, c httpTestCase, conn net.Conn, proto string, resp *http.Response) {
+func assertHTTPResponse(t *testing.T, c httpTestCase, proto string, resp *http.Response) {
 	assert.Equalf(t, c.status, resp.StatusCode, "unexpected status code")
 
 	if c.method == http.MethodHead {
@@ -721,7 +721,7 @@ func TestTProxyServer_can_proxy_http2(t *testing.T) {
 			require.NoError(t, err, "failed to send a request")
 			defer resp.Body.Close()
 
-			assertHTTPResponse(t, c, conn, "HTTP/2.0", resp)
+			assertHTTPResponse(t, c, "HTTP/2.0", resp)
 		})
 	}
 }
