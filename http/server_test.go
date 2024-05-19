@@ -415,7 +415,7 @@ func runHTTP2ProxyTests(t *testing.T, server *httptest.Server, proxyURL *url.URL
 			args := buildCurlArgs(c)
 			curl := exec.Command("curl", args...)
 			bs, err := curl.CombinedOutput()
-			require.NoErrorf(t, err, "failed to execute curl")
+			require.NoErrorf(t, err, "failed to execute curl: %s", string(bs))
 
 			if c.method == http.MethodHead {
 				return // no body
