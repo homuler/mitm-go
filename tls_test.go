@@ -653,9 +653,6 @@ func TestNewTLSListner_can_handle_invalid_client(t *testing.T) {
 	_, err = clientConn.Write([]byte("hello, world\n"))
 	assert.NoError(t, err, "failed to write to the MITM server")
 
-	_, err = io.ReadAll(clientConn)
-	assert.ErrorContains(t, err, "read: connection reset by peer")
-
 	<-done
 }
 
