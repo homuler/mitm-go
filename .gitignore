@@ -1,1 +1,4 @@
 .vscode/
+
+*.crt
+*.pem
