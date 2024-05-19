@@ -1,0 +1,43 @@
+name: Run tests
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '**/*.go'
+      - '**/go.mod'
+      - '**/go.sum'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        go-version: [1.21]
+        os: [ubuntu-24.04, ubuntu-latest, windows-latest, macOS-latest]
+      fail-fast: false
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: ${{ matrix.go-version }}
+
+    - name: Enable the curl_proxy_http2 build tag
+      id: enable-curl_proxy_http2
+      if: ${{ matrix.os == 'ubuntu-24.04' || matrix.os == 'macOS-latest' }}
+      run: echo "build-opts=--tags curl_proxy_http2" >> $GITHUB_OUTPUT
+
+    - name: Build
+      run: go build ${{ steps.enable-curl_proxy_http2.outputs.build-opts }} -v ./...
+
+    - name: Test
+      run: go test ${{ steps.enable-curl_proxy_http2.outputs.build-opts }} -v ./...
