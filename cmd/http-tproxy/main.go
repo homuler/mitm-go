@@ -10,7 +10,6 @@ import (
 	"github.com/homuler/mitm-go"
 	"github.com/homuler/mitm-go/http"
 	"github.com/homuler/mitm-go/http3"
-	"github.com/homuler/mitm-go/tproxy"
 )
 
 func main() {
@@ -27,19 +26,19 @@ func main() {
 	mitmHttpsServer := http.NewTProxyServer(&mitm.TLSConfig{RootCertificate: &rootCert, GetDestination: getDest})
 	mitmHttp3Server := http3.NewTProxyServer(&mitm.QUICConfig{RootCertificate: &rootCert, GetDestination: getDest})
 
-	httpLn, err := tproxy.ListenTCP("tcp", &net.TCPAddr{IP: net.ParseIP("0.0.0.0"), Port: 8080})
+	httpLn, err := mitm.ListenTCPTProxy("tcp", &net.TCPAddr{IP: net.ParseIP("0.0.0.0"), Port: 8080})
 	if err != nil {
 		panic(err)
 	}
 	defer httpLn.Close()
 
-	httpsLn, err := tproxy.ListenTCP("tcp", &net.TCPAddr{IP: net.ParseIP("0.0.0.0"), Port: 8443})
+	httpsLn, err := mitm.ListenTCPTProxy("tcp", &net.TCPAddr{IP: net.ParseIP("0.0.0.0"), Port: 8443})
 	if err != nil {
 		panic(err)
 	}
 	defer httpsLn.Close()
 
-	http3Ln, err := tproxy.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("0.0.0.0"), Port: 443})
+	http3Ln, err := mitm.ListenUDPTProxy("udp", &net.UDPAddr{IP: net.ParseIP("0.0.0.0"), Port: 443})
 	if err != nil {
 		panic(err)
 	}
